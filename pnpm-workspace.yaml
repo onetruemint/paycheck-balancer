@@ -2,3 +2,7 @@ packages:
   - 'app'
   - 'apps/*'
   - 'packages/*'
+  - 'apis/*'
+  - 'common/*'
+allowBuilds:
+  unrs-resolver: true
