@@ -1,12 +1,11 @@
-import {FastifyInstance, FastifyPluginOptions} from 'fastify';
+import { FastifyInstance } from 'fastify';
+import { type PlaidApi } from 'plaid';
+import { createLinkToken, getHealth } from './controller.js';
+import { Decorators } from '../utils/utils.js';
 
-/**
- * Encapsulates the routes
- * @param {FastifyInstance} fastify  Encapsulated Fastify Instance
- * @param {Object} options plugin options, refer to https://fastify.dev/docs/latest/Reference/Plugins/#plugin-options
- */
+export default async function PlaidRouter(fastify: FastifyInstance) {
+  const client: PlaidApi = fastify.getDecorator(Decorators.GET_CLIENT);
 
-export default async function PlaidRouter(
-  fastify: FastifyInstance,
-  options?: FastifyPluginOptions
-) {}
+  fastify.post('/api/create_link_token', createLinkToken(client, fastify));
+  fastify.get('/', getHealth);
+}

@@ -1,0 +1,147 @@
+openapi: 3.1.0
+info:
+  title: Paycheck Balancer Plaid API
+  description: API for interacting with Plaid on behalf of Paycheck Balancer.
+  version: 1.0.0
+servers:
+  - url: http://localhost:{port}
+    variables:
+      port:
+        default: '8080'
+paths:
+  /api/create_link_token:
+    post:
+      operationId: createLinkToken
+      summary: Create a Plaid Link token
+      description: >-
+        Creates a Plaid `link_token`, which is used to initialize Plaid Link
+        on the client.
+      tags:
+        - Plaid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLinkTokenRequest'
+      responses:
+        '200':
+          description: Link token successfully created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LinkTokenCreateResponse'
+        '400':
+          description: >-
+            The request to Plaid's `/link/token/create` endpoint failed
+            (e.g. invalid configuration or a validation error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlaidClientError'
+  /api/get_access_token:
+    post:
+      operationId: getAccessToken
+      summary: Get a permanent access token.
+      description: >-
+        Exchanges a temporary public token for a permanent Item Access
+        token.
+      tags:
+        - Plaid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublicTokenExchangeRequest'
+      responses:
+        '200':  
+          description: Access token successfully exchanged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicTokenExchangeResponse'
+        '400':
+          description: >-
+            The request to Plaid's `/item/public_token/exchange` endpoint failed
+            (e.g. invalid configuration or a validation error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlaidClientError'
+components:
+  schemas:
+    PlaidClientError:
+      type: object
+      required:
+        - err
+      properties:
+        err:
+          description: >-
+            Either a validation error message (string) or the raw error
+            thrown while calling Plaid's `/link/token/create` endpoint.
+          oneOf:
+            - type: string
+            - type: object
+    CreateLinkTokenRequest:
+      type: object
+      required:
+        - clientId
+        - redirectUri
+      properties:
+        clientId:
+          type: string
+          description: Unique identifier for the current user (used as Plaid's client_user_id).
+        redirectUri:
+          type: string
+          description: The URI Plaid should redirect to after the Link flow completes.
+    LinkTokenCreateResponse:
+      type: object
+      required:
+        - link_token
+        - expiration
+        - request_id
+      properties:
+        link_token:
+          type: string
+          description: >-
+            A link_token, which can be supplied to Link in order to
+            initialize it and receive a public_token, which can be
+            exchanged for an access_token.
+        expiration:
+          type: string
+          format: date-time
+          description: The expiration date and time for the link_token, in ISO 8601 format.
+        request_id:
+          type: string
+          description: >-
+            A unique identifier for the request, which can be used for
+            troubleshooting.
+        hosted_link_url:
+          type: string
+          description: >-
+            A URL of a Plaid-hosted Link flow that will use the Link token
+            returned by this request. Only present if the session is
+            enabled for Hosted Link.
+    PublicTokenExchangeRequest:
+      type: object
+      required:
+        - publicToken
+      properties:
+        publicToken:
+          type: string
+          description: A temporary Item Public Token.
+    PublicTokenExchangeResponse:
+      type: object
+      required:
+        - access_token
+        - item_id
+      properties:
+        access_token:
+          type: string
+          description: >-
+            An access_token associated with the item for which data is being requested.
+        item_id:
+          type: string
+          description: >-
+            The item_id value of the Item associated with the returned access_token

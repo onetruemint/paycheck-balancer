@@ -6,3 +6,5 @@ packages:
   - 'common/*'
 allowBuilds:
   unrs-resolver: true
+  esbuild: true
+  '@openapitools/openapi-generator-cli': true
