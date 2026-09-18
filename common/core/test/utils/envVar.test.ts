@@ -1,4 +1,4 @@
-import { getEnvVar } from '../../src/utils/envVar';
+import { getEnvVar } from '../../src/utils/utils';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
 describe('get environment variables', () => {
