@@ -1,4 +1,4 @@
-import { getEnvVar } from '@paycheck-balancer/core/src/index.js';
+import { getEnvVar } from '@paycheck-balancer/core';
 import PlaidApp from './app.js';
 
 const PLAID_APP_PORT = Number(getEnvVar('PLAID_API_PORT'));

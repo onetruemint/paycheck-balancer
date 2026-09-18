@@ -4,9 +4,10 @@
   "description": "",
   "main": "dist/server.js",
   "scripts": {
-    "dev": "pnpm dlx tsx src/server.ts",
-    "start": "nodemon dist/src/server.js",
-    "build": "tsc",
+    "dev": "tsx watch src/server.ts",
+    "start": "nodemon dist/server.js",
+    "generate:client": "openapi-generator-cli generate && node scripts/fix-generated-esm-imports.mjs",
+    "build": "pnpm run generate:client && tsc",
     "lint": "eslint .",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -15,14 +16,21 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@fastify/cors": "^11.3.0",
+    "@fastify/formbody": "^9.0.0",
     "@paycheck-balancer/core": "workspace:*",
+    "axios": "^1.20.0",
     "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
     "fastify": "^5.12.4",
+    "moment": "^2.31.0",
     "plaid": "^47.0.0"
   },
   "devDependencies": {
+    "@openapitools/openapi-generator-cli": "^2.41.0",
     "@types/node": "^24.0.0",
     "nodemon": "^3.1.14",
+    "tsx": "^4.23.13",
     "typescript": "~6.0.3"
   }
 }
