@@ -1,0 +1,633 @@
+openapi: 3.1.0
+info:
+  title: StateMint Local API
+  version: 0.1.0
+  description: >-
+    Backend contract required by the StateMint frontend (see
+    `frontend-requirements.md`). LAN-only, no authentication.
+
+
+    **All money values are integer cents (USD).** Dates are `YYYY-MM-DD`
+    strings; timestamps are RFC 3339.
+
+
+    The funding-order and statement-status calculation is performed
+    entirely server-side (original `requirements.md` §6.3–6.4). The frontend
+    only renders the results returned here.
+servers:
+  - url: http://localhost:{port}
+    variables:
+      port:
+        default: '8080'
+tags:
+  - name: Snapshots
+  - name: Accounts
+  - name: ManualCards
+  - name: Institutions
+  - name: Link
+
+paths:
+  /api/snapshots/current:
+    post:
+      operationId: resolveCurrentSnapshot
+      tags: [Snapshots]
+      summary: Get or compute the current month's snapshot
+      description: >-
+        Called on every app open and on Refresh. Idempotent.
+
+
+        1. `SELECT * FROM monthly_snapshot WHERE month_key = $1` for the
+        current month (server-local time, `YYYY-MM`). If a row exists, return
+        it with `state: ready` — no recompute.
+
+        2. Otherwise, if no Plaid Items and no manual cards exist, return
+        `state: no_accounts` (frontend shows "Link account to get started").
+
+        3. Otherwise fetch transactions / balances / liabilities, auto-pick the
+        largest deposit into the Paycheck-role account within the last 3–5
+        days as the paycheck amount, run the calculation, then
+        `INSERT ... ON CONFLICT (month_key) DO NOTHING` and re-select the row
+        (so a concurrent request's winning row is what gets returned).
+
+        4. If no qualifying deposit is found, return `state: no_paycheck`
+        and write nothing.
+
+
+        A failure fetching one Item must not fail the request: affected
+        entries in `detail.items` carry a non-null `error` and null numbers.
+        See `CurrentSnapshotResponse.persisted` for the open question about
+        persisting partially-failed snapshots.
+
+
+        POST is used (rather than GET) because the call may write a row.
+      responses:
+        '200':
+          description: Current-month state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentSnapshotResponse'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /api/snapshots:
+    get:
+      operationId: listSnapshots
+      tags: [Snapshots]
+      summary: List monthly snapshots, newest first
+      description: >-
+        Returns full snapshots (including `detail`) ordered by `month_key`
+        descending. One row per month, so payloads stay small.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 120, default: 24 }
+        - name: before
+          in: query
+          description: Return only months strictly before this `YYYY-MM` key (pagination cursor).
+          schema: { $ref: '#/components/schemas/MonthKey' }
+      responses:
+        '200':
+          description: Snapshots, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [snapshots]
+                properties:
+                  snapshots:
+                    type: array
+                    items: { $ref: '#/components/schemas/Snapshot' }
+                  next_before:
+                    description: Cursor for the next page, or null when exhausted.
+                    oneOf:
+                      - $ref: '#/components/schemas/MonthKey'
+                      - type: 'null'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /api/snapshots/{monthKey}:
+    get:
+      operationId: getSnapshot
+      tags: [Snapshots]
+      summary: Get a single stored snapshot
+      parameters:
+        - name: monthKey
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/MonthKey' }
+      responses:
+        '200':
+          description: The snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Snapshot' }
+        '404':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /api/accounts:
+    get:
+      operationId: listAccounts
+      tags: [Accounts]
+      summary: List all Plaid accounts across linked Items, with role config
+      responses:
+        '200':
+          description: Accounts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accounts]
+                properties:
+                  accounts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Account' }
+        default:
+          $ref: '#/components/responses/Error'
+
+  /api/accounts/{accountId}:
+    patch:
+      operationId: updateAccount
+      tags: [Accounts]
+      summary: Set an account's role and/or target balance
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AccountUpdate' }
+      responses:
+        '200':
+          description: Updated account.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/manual-cards:
+    get:
+      operationId: listManualCards
+      tags: [ManualCards]
+      summary: List manual cards
+      responses:
+        '200':
+          description: Manual cards.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cards]
+                properties:
+                  cards:
+                    type: array
+                    items: { $ref: '#/components/schemas/ManualCard' }
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: createManualCard
+      tags: [ManualCards]
+      summary: Create a manual card
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ManualCardInput' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ManualCard' }
+        '400':
+          $ref: '#/components/responses/Error'
+
+  /api/manual-cards/{cardId}:
+    put:
+      operationId: updateManualCard
+      tags: [ManualCards]
+      summary: Replace a manual card
+      parameters:
+        - $ref: '#/components/parameters/CardId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ManualCardInput' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ManualCard' }
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    delete:
+      operationId: deleteManualCard
+      tags: [ManualCards]
+      summary: Delete a manual card
+      parameters:
+        - $ref: '#/components/parameters/CardId'
+      responses:
+        '204':
+          description: Deleted.
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/institutions:
+    get:
+      operationId: listInstitutions
+      tags: [Institutions]
+      summary: List linked institutions (Plaid Items) with status
+      description: >-
+        Status is derived from the most recent Plaid call for the Item (e.g.
+        `ITEM_LOGIN_REQUIRED` / `PENDING_EXPIRATION` → `needs_reconnect`).
+        No webhooks — status reflects what the server last observed.
+      responses:
+        '200':
+          description: Institutions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [institutions]
+                properties:
+                  institutions:
+                    type: array
+                    items: { $ref: '#/components/schemas/Institution' }
+        default:
+          $ref: '#/components/responses/Error'
+
+  /api/link/token:
+    post:
+      operationId: createLinkToken
+      tags: [Link]
+      summary: Create a Plaid Hosted Link token (new or update mode)
+      description: >-
+        Wraps Plaid `/link/token/create` with `hosted_link` enabled and
+        `hosted_link.completion_redirect_uri` set to the provided URI.
+        `mode: update` passes the Item's access token so Plaid runs update
+        mode (reconnect). The frontend stores `link_token` locally and then
+        navigates to `hosted_link_url`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LinkTokenRequest' }
+      responses:
+        '200':
+          description: Token created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LinkTokenResponse' }
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/link/complete:
+    post:
+      operationId: completeLink
+      tags: [Link]
+      summary: Complete a Hosted Link session synchronously
+      description: >-
+        Called by the frontend after Plaid redirects back to the app. The
+        server calls Plaid `/link/token/get`, inspects the Hosted Link
+        session results and — for a successful `new` session — exchanges the
+        public token (`/item/public_token/exchange`), stores the access token
+        and imports the Item's accounts (default role `ignored`), all before
+        responding. For `update` mode it marks the Item healthy again. No
+        webhook, no async wait. Must be idempotent for the same `link_token`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [link_token]
+              properties:
+                link_token: { type: string }
+      responses:
+        '200':
+          description: Session outcome.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LinkCompleteResponse' }
+        '400':
+          $ref: '#/components/responses/Error'
+
+components:
+  parameters:
+    CardId:
+      name: cardId
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    Error:
+      description: Error.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+
+  schemas:
+    ApiError:
+      type: object
+      required: [message]
+      properties:
+        code: { type: string, description: 'Machine-readable code, e.g. NOT_FOUND, VALIDATION, PLAID_ERROR.' }
+        message: { type: string }
+
+    MonthKey:
+      type: string
+      pattern: '^\d{4}-\d{2}$'
+      examples: ['2026-09']
+
+    Cents:
+      type: integer
+      description: Integer amount in US cents.
+
+    CurrentSnapshotResponse:
+      description: Discriminated by `state`.
+      oneOf:
+        - $ref: '#/components/schemas/CurrentSnapshotReady'
+        - $ref: '#/components/schemas/CurrentSnapshotNoAccounts'
+        - $ref: '#/components/schemas/CurrentSnapshotNoPaycheck'
+      discriminator:
+        propertyName: state
+        mapping:
+          ready: '#/components/schemas/CurrentSnapshotReady'
+          no_accounts: '#/components/schemas/CurrentSnapshotNoAccounts'
+          no_paycheck: '#/components/schemas/CurrentSnapshotNoPaycheck'
+
+    CurrentSnapshotReady:
+      type: object
+      required: [state, snapshot, persisted]
+      properties:
+        state: { const: ready }
+        snapshot: { $ref: '#/components/schemas/Snapshot' }
+        persisted:
+          type: boolean
+          description: >-
+            True when the returned snapshot is the stored row. OPEN QUESTION:
+            with `ON CONFLICT DO NOTHING`, a snapshot stored while an Item was
+            failing keeps "Data unavailable" for the whole month. The server
+            may choose to skip the INSERT when any item has an `error` and
+            return `persisted: false`, so the next open retries.
+
+    CurrentSnapshotNoAccounts:
+      type: object
+      required: [state]
+      properties:
+        state: { const: no_accounts }
+
+    CurrentSnapshotNoPaycheck:
+      type: object
+      required: [state, month_key]
+      properties:
+        state: { const: no_paycheck }
+        month_key: { $ref: '#/components/schemas/MonthKey' }
+        message:
+          type: string
+          description: Human-readable reason, e.g. "No deposit found in the paycheck account in the last 5 days."
+
+    Snapshot:
+      description: One row of `monthly_snapshot`.
+      type: object
+      required: [month_key, computed_at, paycheck_amount_cents, transfer_cents, detail]
+      properties:
+        month_key: { $ref: '#/components/schemas/MonthKey' }
+        computed_at: { type: string, format: date-time }
+        paycheck_amount_cents: { $ref: '#/components/schemas/Cents' }
+        transfer_cents:
+          $ref: '#/components/schemas/Cents'
+        detail: { $ref: '#/components/schemas/SnapshotDetail' }
+
+    SnapshotDetail:
+      description: Stored verbatim in `monthly_snapshot.detail` (JSONB).
+      type: object
+      required: [version, items]
+      properties:
+        version:
+          type: integer
+          const: 1
+          description: Schema version of this JSON blob, for future migrations.
+        paycheck:
+          description: The deposit auto-picked as the paycheck.
+          oneOf:
+            - $ref: '#/components/schemas/PaycheckPick'
+            - type: 'null'
+        items:
+          type: array
+          description: Cards and targets in funding order (as decided by the server).
+          items: { $ref: '#/components/schemas/SnapshotItem' }
+
+    PaycheckPick:
+      type: object
+      required: [account_id, amount_cents, date]
+      properties:
+        account_id: { type: string }
+        account_name: { type: string }
+        transaction_id: { type: string }
+        amount_cents: { $ref: '#/components/schemas/Cents' }
+        date: { type: string, format: date }
+
+    SnapshotItem:
+      type: object
+      description: >-
+        One card (Plaid or manual) or savings target. When `error` is
+        non-null the numeric/status fields are null and the frontend shows
+        "Data unavailable" for this row only.
+      required: [id, kind, name, owed_cents, funded_cents, status, error]
+      properties:
+        id:
+          type: string
+          description: Plaid account_id or manual card id.
+        kind:
+          type: string
+          enum: [card, manual_card, target]
+        name: { type: string }
+        institution_name: { type: [string, 'null'] }
+        mask: { type: [string, 'null'], description: Last 4 digits. }
+        owed_cents:
+          type: [integer, 'null']
+          description: Amount this item needs this cycle.
+        funded_cents:
+          type: [integer, 'null']
+          description: Portion of the transfer allocated to this item.
+        statement_balance_cents:
+          type: [integer, 'null']
+          description: Cards only.
+        due_date:
+          type: [string, 'null']
+          format: date
+          description: Cards only.
+        current_balance_cents:
+          type: [integer, 'null']
+          description: Targets only — balance at computation time.
+        target_balance_cents:
+          type: [integer, 'null']
+          description: Targets only.
+        status:
+          oneOf:
+            - $ref: '#/components/schemas/ItemStatus'
+            - type: 'null'
+        error:
+          oneOf:
+            - $ref: '#/components/schemas/ItemError'
+            - type: 'null'
+
+    ItemStatus:
+      type: string
+      description: >-
+        Statement / target status as computed server-side. ASSUMPTION — align
+        with `requirements.md` §6.4. Frontend colours: `overdue` red,
+        `partially_paid` amber, everything else neutral.
+      enum:
+        - paid            # statement already paid, nothing owed
+        - partially_paid  # some payment made, remainder owed
+        - due             # statement outstanding, not yet due
+        - overdue         # past due date and unpaid
+        - no_statement    # no statement this cycle
+        - at_target       # target: already at/above target balance
+        - below_target    # target: top-up needed
+
+    ItemError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Plaid error code or internal code, e.g. ITEM_LOGIN_REQUIRED.
+        message: { type: string }
+        institution_id:
+          type: [string, 'null']
+          description: Item that failed, so the UI can offer a reconnect.
+
+    AccountRole:
+      type: string
+      enum: [paycheck, payment, target, card, ignored]
+
+    Account:
+      type: object
+      required: [id, institution_id, name, type, role, current_balance_cents, target_balance_cents]
+      properties:
+        id: { type: string, description: Plaid account_id. }
+        institution_id: { type: string, description: Owning Item id (see Institution.id). }
+        institution_name: { type: string }
+        name: { type: string }
+        official_name: { type: [string, 'null'] }
+        mask: { type: [string, 'null'] }
+        type: { type: string, description: 'Plaid account type: depository, credit, loan, …' }
+        subtype: { type: [string, 'null'] }
+        current_balance_cents:
+          type: [integer, 'null']
+          description: Latest known balance; null if never fetched.
+        role: { $ref: '#/components/schemas/AccountRole' }
+        target_balance_cents:
+          type: [integer, 'null']
+          description: Only meaningful when role = target.
+
+    AccountUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        role: { $ref: '#/components/schemas/AccountRole' }
+        target_balance_cents:
+          type: [integer, 'null']
+          minimum: 0
+
+    ManualCardInput:
+      type: object
+      required: [name, statement_balance_cents, statement_date, due_date, statement_day, paid, linked_account_id]
+      properties:
+        name: { type: string, minLength: 1 }
+        statement_balance_cents: { type: integer, minimum: 0 }
+        statement_date: { type: [string, 'null'], format: date }
+        due_date: { type: [string, 'null'], format: date }
+        statement_day:
+          type: [integer, 'null']
+          minimum: 1
+          maximum: 31
+          description: Day of month the statement closes.
+        paid: { type: boolean }
+        linked_account_id:
+          type: [string, 'null']
+          description: Optional Plaid account this card is tied to.
+
+    ManualCard:
+      allOf:
+        - $ref: '#/components/schemas/ManualCardInput'
+        - type: object
+          required: [id, updated_at]
+          properties:
+            id: { type: string }
+            updated_at: { type: string, format: date-time }
+
+    InstitutionStatus:
+      type: string
+      enum: [healthy, needs_reconnect, error]
+
+    Institution:
+      type: object
+      required: [id, name, status]
+      properties:
+        id: { type: string, description: Plaid item_id. }
+        plaid_institution_id: { type: [string, 'null'] }
+        name: { type: string }
+        status: { $ref: '#/components/schemas/InstitutionStatus' }
+        status_detail:
+          type: [string, 'null']
+          description: Plaid error code / message behind a non-healthy status.
+        last_success_at: { type: [string, 'null'], format: date-time }
+
+    LinkTokenRequest:
+      type: object
+      required: [mode, completion_redirect_uri]
+      properties:
+        mode:
+          type: string
+          enum: [new, update]
+        institution_id:
+          type: string
+          description: Required when mode = update — the Item to reconnect.
+        completion_redirect_uri:
+          type: string
+          format: uri
+          description: Where Plaid Hosted Link sends the browser when done.
+
+    LinkTokenResponse:
+      type: object
+      required: [link_token, hosted_link_url, expiration]
+      properties:
+        link_token: { type: string }
+        hosted_link_url: { type: string, format: uri }
+        expiration: { type: string, format: date-time }
+
+    LinkCompleteResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [success, exited, pending]
+          description: >-
+            `success` — Item linked/repaired. `exited` — user closed Link
+            without finishing. `pending` — Plaid has no completed session for
+            this token yet.
+        institution:
+          description: Present when status = success.
+          oneOf:
+            - $ref: '#/components/schemas/Institution'
+            - type: 'null'
