@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   api,
   type Account,
@@ -70,7 +70,7 @@ export function Accounts({ linkState, onRetryLink }: Props) {
     try {
       await startLink(mode, institutionId);
     } catch (e) {
-      setError(`Couldn't start Plaid Link: ${(e as Error).message}`);
+      setError(`Couldn’t start Plaid Link: ${(e as Error).message}. Try again in a moment.`);
       setLinking(null);
     }
   };
@@ -88,7 +88,7 @@ export function Accounts({ linkState, onRetryLink }: Props) {
     } catch (e) {
       // Roll back the optimistic update.
       if (previous) setAccounts((prev) => prev?.map((a) => (a.id === id ? previous : a)) ?? null);
-      setError(`Couldn't save ${previous?.name ?? 'account'}: ${(e as Error).message}`);
+      setError(`Couldn’t save ${previous?.name ?? 'account'}: ${(e as Error).message}. The previous setting was restored.`);
     }
   };
 
@@ -98,7 +98,8 @@ export function Accounts({ linkState, onRetryLink }: Props) {
     return (
       <section className="center-stack">
         {linkState && <LinkBanner state={linkState} onRetry={onRetryLink} />}
-        <p className="muted">Couldn't load accounts.</p>
+        <h1 className="empty-title">Couldn’t load accounts</h1>
+        <p className="muted">Check that the home server is running, then retry.</p>
         <p className="small muted">{loadError}</p>
         <button className="button" onClick={retryLoad}>
           Retry
@@ -112,13 +113,17 @@ export function Accounts({ linkState, onRetryLink }: Props) {
       <h1 className="page-title">Accounts &amp; Settings</h1>
 
       {linkState && <LinkBanner state={linkState} onRetry={onRetryLink} />}
-      {error && <p className="notice notice-danger">{error}</p>}
+      {error && (
+        <p className="notice notice-danger" role="alert">
+          {error}
+        </p>
+      )}
 
       <div className="card">
         <div className="section-head">
           <h2>Institutions</h2>
           <button className="button button-primary" onClick={() => link('new')} disabled={!!linking}>
-            {linking === 'new' ? 'Opening…' : 'Link account'}
+            {linking === 'new' ? 'Opening Plaid…' : 'Link Account'}
           </button>
         </div>
         {institutions.length === 0 ? (
@@ -130,17 +135,23 @@ export function Accounts({ linkState, onRetryLink }: Props) {
               return (
                 <li key={inst.id} className="row">
                   <div className="row-main">
-                    <span className="row-title">{inst.name}</span>
-                    {inst.status_detail && <span className="small muted">{inst.status_detail}</span>}
+                    <span className="row-title">
+                      {inst.name} <span className={`chip chip-${s.tone}`}>{s.label}</span>
+                    </span>
+                    {inst.status_detail && (
+                      <code className="status-code" translate="no">
+                        {inst.status_detail}
+                      </code>
+                    )}
                   </div>
-                  <span className={`chip chip-${s.tone}`}>{s.label}</span>
                   {inst.status !== 'healthy' && (
                     <button
                       className="button button-small"
                       onClick={() => link('update', inst.id)}
                       disabled={!!linking}
+                      aria-label={`Reconnect ${inst.name}`}
                     >
-                      {linking === inst.id ? 'Opening…' : 'Reconnect'}
+                      {linking === inst.id ? 'Opening Plaid…' : 'Reconnect'}
                     </button>
                   )}
                 </li>
@@ -164,8 +175,8 @@ export function Accounts({ linkState, onRetryLink }: Props) {
       </div>
 
       {loadError && (
-        <p className="notice notice-danger">
-          Couldn't refresh accounts: {loadError}{' '}
+        <p className="notice notice-danger" role="alert">
+          Couldn’t refresh accounts: {loadError}{' '}
           <button className="link-button" onClick={retryLoad}>
             Retry
           </button>
@@ -185,31 +196,40 @@ function LinkBanner({ state, onRetry }: { state: LinkOutcome; onRetry: () => voi
   );
   if (state.kind === 'no_session') {
     return (
-      <p className="notice notice-warning">
-        Returned from Plaid, but no link session was found on this device. Please link again.
+      <p className="notice notice-warning" role="status">
+        Returned from Plaid, but this device has no record of the link session. Tap Link Account
+        to start again.
       </p>
     );
   }
   if (state.kind === 'error') {
     return (
-      <p className="notice notice-danger">
-        Couldn't finish linking: {state.message} {retry}
+      <p className="notice notice-danger" role="alert">
+        Couldn’t finish linking: {state.message} {retry}
       </p>
     );
   }
   const { result } = state;
   if (result.status === 'success') {
     return (
-      <p className="notice">
+      <p className="notice notice-success" role="status">
         {result.institution ? `${result.institution.name} linked.` : 'Account linked.'} Set each
-        account's role below.
+        account’s role below.
       </p>
     );
   }
   if (result.status === 'exited') {
-    return <p className="notice notice-warning">Linking was cancelled.</p>;
+    return (
+      <p className="notice notice-warning" role="status">
+        Linking was cancelled. Nothing changed.
+      </p>
+    );
   }
-  return <p className="notice notice-warning">Plaid hasn't finished that session yet. {retry}</p>;
+  return (
+    <p className="notice notice-warning" role="status">
+      Plaid hasn’t finished that session yet. {retry}
+    </p>
+  );
 }
 
 function accountLabel(a: Account) {
@@ -230,6 +250,7 @@ function AccountRow({ account, onChange }: { account: Account; onChange: (u: Par
   };
 
   const selectId = `role-${account.id}`;
+  const targetErrorId = `target-error-${account.id}`;
   return (
     <li className="row row-wrap">
       <div className="row-main">
@@ -258,13 +279,22 @@ function AccountRow({ account, onChange }: { account: Account; onChange: (u: Par
           <span>Target balance</span>
           <input
             className={`input${invalid ? ' input-invalid' : ''}`}
+            name={`target-${account.id}`}
+            autoComplete="off"
             inputMode="decimal"
-            placeholder="0.00"
+            placeholder="1500.00…"
+            aria-invalid={invalid || undefined}
+            aria-describedby={invalid ? targetErrorId : undefined}
             value={target}
             onChange={(e) => setTarget(e.target.value)}
             onBlur={commitTarget}
             onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
           />
+          {invalid && (
+            <span id={targetErrorId} className="field-error" role="alert">
+              Enter an amount like 1500.00
+            </span>
+          )}
         </label>
       )}
     </li>
@@ -297,12 +327,12 @@ function ManualCards({ cards, accounts, onChange, onError }: ManualCardsProps) {
   };
 
   const remove = async (card: ManualCard) => {
-    if (!confirm(`Delete ${card.name}?`)) return;
+    if (!confirm(`Delete ${card.name}? This can’t be undone.`)) return;
     try {
       await api.deleteManualCard(card.id);
       onChange(cards.filter((c) => c.id !== card.id));
     } catch (e) {
-      onError(`Couldn't delete card: ${(e as Error).message}`);
+      onError(`Couldn’t delete card: ${(e as Error).message}. Try again.`);
     }
   };
 
@@ -312,14 +342,16 @@ function ManualCards({ cards, accounts, onChange, onError }: ManualCardsProps) {
         <h2>Manual cards</h2>
         {editing === null && (
           <button className="button" onClick={() => setEditing('new')}>
-            Add card
+            Add Card
           </button>
         )}
       </div>
       {editing === 'new' && (
         <ManualCardForm accounts={accounts} onSave={save} onCancel={() => setEditing(null)} />
       )}
-      {cards.length === 0 && editing !== 'new' && <p className="muted">No manual cards.</p>}
+      {cards.length === 0 && editing !== 'new' && (
+        <p className="muted">No manual cards. Add one for any card Plaid can’t connect to.</p>
+      )}
       <ul className="rows">
         {cards.map((c) => {
           const linked = c.linked_account_id ? byId.get(c.linked_account_id) : undefined;
@@ -344,10 +376,18 @@ function ManualCards({ cards, accounts, onChange, onError }: ManualCardsProps) {
                 </span>
               </div>
               <div className="row-actions">
-                <button className="button button-small" onClick={() => setEditing(c)}>
+                <button
+                  className="button button-small"
+                  onClick={() => setEditing(c)}
+                  aria-label={`Edit ${c.name}`}
+                >
                   Edit
                 </button>
-                <button className="button button-small button-ghost" onClick={() => remove(c)}>
+                <button
+                  className="button button-small button-ghost button-danger"
+                  onClick={() => remove(c)}
+                  aria-label={`Delete ${c.name}`}
+                >
                   Delete
                 </button>
               </div>
@@ -366,6 +406,9 @@ interface FormProps {
   onCancel: () => void;
 }
 
+type FieldName = 'name' | 'balance' | 'day';
+type Problem = { field?: FieldName; message: string } | null;
+
 function ManualCardForm({ initial, accounts, onSave, onCancel }: FormProps) {
   const [name, setName] = useState(initial?.name ?? '');
   const [balance, setBalance] = useState(centsToInput(initial?.statement_balance_cents ?? null));
@@ -375,69 +418,116 @@ function ManualCardForm({ initial, accounts, onSave, onCancel }: FormProps) {
   const [paid, setPaid] = useState(initial?.paid ?? false);
   const [linkedId, setLinkedId] = useState(initial?.linked_account_id ?? '');
   const [saving, setSaving] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
+  const [problem, setProblem] = useState<Problem>(null);
+  const refs = {
+    name: useRef<HTMLInputElement>(null),
+    balance: useRef<HTMLInputElement>(null),
+    day: useRef<HTMLInputElement>(null),
+  };
+  const idBase = `card-${initial?.id ?? 'new'}`;
 
   const linked = accounts.find((a) => a.id === linkedId);
+
+  // Show the error next to the field and move focus there.
+  const invalid = (field: FieldName, message: string) => {
+    setProblem({ field, message });
+    refs[field].current?.focus();
+  };
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     const cents = parseMoney(balance);
     const day = statementDay === '' ? null : Number(statementDay);
-    if (!name.trim()) return setProblem('Name is required.');
-    if (cents === null) return setProblem('Statement balance must be an amount like 123.45.');
+    if (!name.trim()) return invalid('name', 'Enter a name for this card.');
+    if (cents === null) return invalid('balance', 'Enter an amount like 123.45.');
     if (day !== null && (!Number.isInteger(day) || day < 1 || day > 31))
-      return setProblem('Statement day must be 1–31.');
+      return invalid('day', 'Enter a day from 1 to 31.');
     setProblem(null);
     setSaving(true);
     try {
       await onSave({
-      name: name.trim(),
-      statement_balance_cents: cents,
-      statement_date: statementDate || null,
-      due_date: dueDate || null,
-      statement_day: day,
-      paid,
-      linked_account_id: linkedId || null,
+        name: name.trim(),
+        statement_balance_cents: cents,
+        statement_date: statementDate || null,
+        due_date: dueDate || null,
+        statement_day: day,
+        paid,
+        linked_account_id: linkedId || null,
       });
     } catch (err) {
-      setProblem(`Couldn't save card: ${(err as Error).message}`);
+      setProblem({ message: `Couldn’t save card: ${(err as Error).message}. Try again.` });
     } finally {
       setSaving(false);
     }
   };
 
+  // Shared props for inputs that can carry a field-level validation error.
+  const fieldProps = (field: FieldName) => {
+    const hasError = problem?.field === field;
+    return {
+      ref: refs[field],
+      className: `input${hasError ? ' input-invalid' : ''}`,
+      'aria-invalid': hasError || undefined,
+      'aria-describedby': hasError ? `${idBase}-${field}-error` : undefined,
+    };
+  };
+  const fieldError = (field: FieldName) =>
+    problem?.field === field && (
+      <span id={`${idBase}-${field}-error`} className="field-error" role="alert">
+        {problem.message}
+      </span>
+    );
+
   return (
-    <form className="form" onSubmit={submit}>
+    <form className="form" onSubmit={submit} noValidate>
       <label className="field">
         <span>Name</span>
-        <input className="input" value={name} onChange={(e) => setName(e.target.value)} required />
+        <input
+          {...fieldProps('name')}
+          name="card-name"
+          autoComplete="off"
+          placeholder="Costco Citi…"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        {fieldError('name')}
       </label>
       <div className="field-grid">
         <label className="field">
           <span>Statement balance</span>
           <input
-            className="input"
+            {...fieldProps('balance')}
+            name="statement-balance"
+            autoComplete="off"
             inputMode="decimal"
-            placeholder="0.00"
+            placeholder="123.45…"
             value={balance}
             onChange={(e) => setBalance(e.target.value)}
           />
+          {fieldError('balance')}
         </label>
         <label className="field">
           <span>Statement day</span>
           <input
-            className="input"
+            {...fieldProps('day')}
+            name="statement-day"
+            autoComplete="off"
             type="number"
+            inputMode="numeric"
             min={1}
             max={31}
+            placeholder="26…"
             value={statementDay}
             onChange={(e) => setStatementDay(e.target.value)}
           />
+          {fieldError('day')}
         </label>
         <label className="field">
           <span>Statement date</span>
           <input
             className="input"
+            name="statement-date"
+            autoComplete="off"
             type="date"
             value={statementDate}
             onChange={(e) => setStatementDate(e.target.value)}
@@ -445,12 +535,24 @@ function ManualCardForm({ initial, accounts, onSave, onCancel }: FormProps) {
         </label>
         <label className="field">
           <span>Due date</span>
-          <input className="input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+          <input
+            className="input"
+            name="due-date"
+            autoComplete="off"
+            type="date"
+            value={dueDate}
+            onChange={(e) => setDueDate(e.target.value)}
+          />
         </label>
       </div>
       <label className="field">
         <span>Linked account (optional)</span>
-        <select className="select" value={linkedId} onChange={(e) => setLinkedId(e.target.value)}>
+        <select
+          className="select"
+          name="linked-account"
+          value={linkedId}
+          onChange={(e) => setLinkedId(e.target.value)}
+        >
           <option value="">None</option>
           {accounts.map((a) => (
             <option key={a.id} value={a.id}>
@@ -458,19 +560,25 @@ function ManualCardForm({ initial, accounts, onSave, onCancel }: FormProps) {
             </option>
           ))}
         </select>
-        {linked && <span className="small muted">Current balance: {money(linked.current_balance_cents)}</span>}
+        {linked && (
+          <span className="small muted">Current balance: {money(linked.current_balance_cents)}</span>
+        )}
       </label>
       <label className="checkbox">
-        <input type="checkbox" checked={paid} onChange={(e) => setPaid(e.target.checked)} />
-        <span>Paid</span>
+        <input type="checkbox" name="paid" checked={paid} onChange={(e) => setPaid(e.target.checked)} />
+        <span>Statement paid</span>
       </label>
-      {problem && <p className="notice notice-danger">{problem}</p>}
+      {problem && !problem.field && (
+        <p className="notice notice-danger" role="alert">
+          {problem.message}
+        </p>
+      )}
       <div className="form-actions">
         <button type="button" className="button button-ghost" onClick={onCancel}>
           Cancel
         </button>
         <button type="submit" className="button button-primary" disabled={saving}>
-          {saving ? 'Saving…' : 'Save'}
+          {saving ? 'Saving…' : 'Save Card'}
         </button>
       </div>
     </form>

@@ -40,14 +40,24 @@ export function History() {
     }
   };
 
-  if (error && !snapshots) return <p className="center-stack muted">Couldn't load history: {error}</p>;
+  if (error && !snapshots) {
+    return (
+      <section className="center-stack">
+        <h1 className="empty-title">Couldn’t load history</h1>
+        <p className="muted">Check that the home server is running, then reopen this page.</p>
+        <p className="small muted">{error}</p>
+      </section>
+    );
+  }
   if (!snapshots) return <Spinner />;
 
   return (
     <section>
       <h1 className="page-title">History</h1>
       {snapshots.length === 0 ? (
-        <p className="muted">No snapshots yet. Your first one is saved when you open Home.</p>
+        <p className="empty-note muted">
+          No snapshots yet. Your first one is saved the next time Home loads cleanly.
+        </p>
       ) : (
         <ul className="history">
           {snapshots.map((s) => {
@@ -83,11 +93,11 @@ export function History() {
       {nextBefore && (
         <div className="load-more">
           <button className="button button-ghost" onClick={loadMore} disabled={loadingMore}>
-            {loadingMore ? 'Loading…' : loadMoreError ? 'Retry' : 'Load older'}
+            {loadingMore ? 'Loading…' : loadMoreError ? 'Retry' : 'Load Older'}
           </button>
           {loadMoreError && (
             <p className="small load-more-error" role="alert">
-              Couldn't load older snapshots: {loadMoreError}
+              Couldn’t load older snapshots: {loadMoreError}
             </p>
           )}
         </div>

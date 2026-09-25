@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
 import { isMock } from './api';
 import { Drawer } from './components/Drawer';
 import { MenuIcon, MoonIcon, SunIcon } from './components/Icons';
@@ -9,6 +9,12 @@ import { History } from './screens/History';
 import { Home } from './screens/Home';
 import { useTheme } from './theme';
 
+// Hash routing owns location.hash, so the skip link moves focus instead of navigating.
+function skipToMain(e: MouseEvent) {
+  e.preventDefault();
+  document.getElementById('main')?.focus();
+}
+
 export function App({ linkReturn }: { linkReturn: boolean }) {
   const route = useRoute();
   const [theme, toggleTheme] = useTheme();
@@ -18,6 +24,7 @@ export function App({ linkReturn }: { linkReturn: boolean }) {
     linkReturn ? 'completing' : null,
   );
   const retryLink = useCallback(() => setLinkState('completing'), []);
+  const menuButton = useRef<HTMLButtonElement>(null);
 
   // Returning from Plaid Hosted Link: complete the session before showing Accounts.
   useEffect(() => {
@@ -27,11 +34,21 @@ export function App({ linkReturn }: { linkReturn: boolean }) {
 
   return (
     <>
+      <a className="skip-link" href="#main" onClick={skipToMain}>
+        Skip to content
+      </a>
       <header className="topbar">
-        <button className="icon-button" onClick={() => setDrawerOpen(true)} aria-label="Open menu">
+        <button
+          ref={menuButton}
+          className="icon-button"
+          onClick={() => setDrawerOpen(true)}
+          aria-label="Open menu"
+          aria-expanded={drawerOpen}
+          aria-controls="drawer"
+        >
           <MenuIcon />
         </button>
-        <span className="topbar-title">
+        <span className="topbar-title" translate="no">
           StateMint{isMock && <span className="mock-tag">mock</span>}
         </span>
         <button
@@ -42,8 +59,8 @@ export function App({ linkReturn }: { linkReturn: boolean }) {
           {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
         </button>
       </header>
-      <Drawer open={drawerOpen} route={route} onClose={closeDrawer} />
-      <main className="content">
+      <Drawer open={drawerOpen} route={route} onClose={closeDrawer} returnFocusTo={menuButton} />
+      <main id="main" className="content" tabIndex={-1}>
         {route === 'home' && <Home />}
         {route === 'history' && <History />}
         {route === 'accounts' && <Accounts linkState={linkState} onRetryLink={retryLink} />}

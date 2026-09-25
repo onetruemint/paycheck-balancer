@@ -43,17 +43,19 @@ export function Home() {
     setRefreshing(false);
   };
 
-  const refreshButton = (
+  const refreshButton = (label = 'Refresh') => (
     <button className="button button-ghost" onClick={refresh} disabled={refreshing}>
       <span className={refreshing ? 'spin' : undefined}>
         <RefreshIcon />
       </span>
-      {refreshing ? 'Refreshing…' : 'Refresh'}
+      {refreshing ? 'Refreshing…' : label}
     </button>
   );
 
   const refreshNotice = refreshError && (
-    <p className="notice notice-danger">Couldn't refresh: {refreshError}</p>
+    <p className="notice notice-danger" role="alert">
+      Couldn’t refresh: {refreshError}. Showing the last result; try again in a moment.
+    </p>
   );
 
   if (state.kind === 'loading') return <Spinner />;
@@ -61,9 +63,10 @@ export function Home() {
   if (state.kind === 'error') {
     return (
       <section className="center-stack">
-        <p className="muted">Couldn't reach the StateMint server.</p>
+        <h1 className="empty-title">Can’t reach StateMint</h1>
+        <p className="muted">Check that the home server is running, then try again.</p>
         <p className="small muted">{state.message}</p>
-        {refreshButton}
+        {refreshButton('Try Again')}
       </section>
     );
   }
@@ -73,8 +76,9 @@ export function Home() {
   if (data.state === 'no_accounts') {
     return (
       <section className="center-stack">
+        <img className="empty-mark" src="/icon.svg" alt="" width="64" height="64" />
         <h1 className="empty-title">Welcome to StateMint</h1>
-        <p className="muted">No accounts are linked yet.</p>
+        <p className="muted">Link a bank to see this month’s transfer.</p>
         <button className="button button-primary" onClick={() => navigate('accounts')}>
           Link account to get started
         </button>
@@ -87,10 +91,12 @@ export function Home() {
     return (
       <section className="center-stack">
         <p className="eyebrow">{monthLabel(data.month_key)}</p>
+        <h1 className="empty-title">No paycheck yet</h1>
         <p className="muted">
-          {data.message ?? 'No paycheck deposit found yet for this month.'}
+          {data.message ?? 'No paycheck deposit found yet for this month.'} Refresh after
+          your deposit lands.
         </p>
-        {refreshButton}
+        {refreshButton()}
         {refreshNotice}
       </section>
     );
@@ -103,25 +109,25 @@ export function Home() {
   return (
     <section className="home">
       <div className="hero card">
-        <p className="eyebrow">Transfer for {monthLabel(snapshot.month_key)}</p>
-        <p className="hero-amount">{money(snapshot.transfer_cents)}</p>
+        <h1 className="eyebrow">Transfer for {monthLabel(snapshot.month_key)}</h1>
+        <HeroAmount cents={snapshot.transfer_cents} />
         <p className="hero-sub">
           from paycheck of {money(snapshot.paycheck_amount_cents)}
           {paycheck && <> on {shortDate(paycheck.date)}</>}
         </p>
         <div className="hero-actions">
           <span className="small muted">Computed {dateTime(snapshot.computed_at)}</span>
-          {refreshButton}
+          {refreshButton()}
         </div>
         {refreshNotice}
         {/* The server never stores a snapshot with failed items (persisted: false). */}
         {!persisted && (
-          <p className="notice">
+          <p className="notice" role="status">
             Not saved
             {unavailable > 0 && (
               <> — {unavailable} {unavailable === 1 ? 'item was' : 'items were'} unavailable</>
             )}
-            . This month's snapshot is only saved once everything loads; tap Refresh or reopen
+            . This month’s snapshot is only saved once everything loads; tap Refresh or reopen
             the app to try again.
           </p>
         )}
@@ -142,5 +148,28 @@ export function Home() {
         {expanded && <Breakdown items={items} />}
       </div>
     </section>
+  );
+}
+
+/** Display-size amount with a de-emphasised currency sign and cents; read as one value. */
+function HeroAmount({ cents }: { cents: number }) {
+  const full = money(cents);
+  const parts = full.match(/^(-?)\$([\d,]+)\.(\d{2})$/);
+  return (
+    <p className="hero-amount">
+      {parts ? (
+        <>
+          <span className="visually-hidden">{full}</span>
+          <span aria-hidden="true">
+            {parts[1]}
+            <span className="hero-currency">$</span>
+            {parts[2]}
+            <span className="hero-cents">.{parts[3]}</span>
+          </span>
+        </>
+      ) : (
+        full
+      )}
+    </p>
   );
 }

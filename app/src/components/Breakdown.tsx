@@ -1,15 +1,14 @@
 import type { ItemStatus, SnapshotItem } from '../api';
 import { money, shortDate } from '../format';
-import { navigate } from '../router';
 
 const STATUS_LABEL: Record<ItemStatus, string> = {
   paid: 'Paid',
-  partially_paid: 'Partially paid',
+  partially_paid: 'Partially Paid',
   due: 'Due',
   overdue: 'Overdue',
-  no_statement: 'No statement',
-  at_target: 'At target',
-  below_target: 'Below target',
+  no_statement: 'No Statement',
+  at_target: 'At Target',
+  below_target: 'Below Target',
 };
 
 // Semantic colours are reserved for these two; everything else stays neutral.
@@ -44,9 +43,9 @@ function ItemRow({ item }: { item: SnapshotItem }) {
           {item.error.institution_id && (
             <>
               {' '}
-              <button className="link-button" onClick={() => navigate('accounts')}>
+              <a className="link-button" href="#/accounts">
                 Reconnect
-              </button>
+              </a>
             </>
           )}
         </p>
