@@ -15,6 +15,7 @@ export function Home() {
   const [state, setState] = useState<State>({ kind: 'loading' });
   const [refreshing, setRefreshing] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
 
   // Same get-or-compute call on open and on Refresh; the server never overwrites
   // an existing month, so Refresh behaves like reloading the page.
@@ -22,8 +23,12 @@ export function Home() {
     try {
       const data = await api.resolveCurrentSnapshot();
       setState({ kind: 'loaded', data });
+      setRefreshError(null);
     } catch (e) {
-      setState({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
+      const message = e instanceof Error ? e.message : String(e);
+      // Keep whatever is already on screen; only a first-load failure is full-screen.
+      setState((prev) => (prev.kind === 'loaded' ? prev : { kind: 'error', message }));
+      setRefreshError(message);
     }
   }, []);
 
@@ -45,6 +50,10 @@ export function Home() {
       </span>
       {refreshing ? 'Refreshing…' : 'Refresh'}
     </button>
+  );
+
+  const refreshNotice = refreshError && (
+    <p className="notice notice-danger">Couldn't refresh: {refreshError}</p>
   );
 
   if (state.kind === 'loading') return <Spinner />;
@@ -69,6 +78,7 @@ export function Home() {
         <button className="button button-primary" onClick={() => navigate('accounts')}>
           Link account to get started
         </button>
+        {refreshNotice}
       </section>
     );
   }
@@ -81,6 +91,7 @@ export function Home() {
           {data.message ?? 'No paycheck deposit found yet for this month.'}
         </p>
         {refreshButton}
+        {refreshNotice}
       </section>
     );
   }
@@ -102,10 +113,16 @@ export function Home() {
           <span className="small muted">Computed {dateTime(snapshot.computed_at)}</span>
           {refreshButton}
         </div>
+        {refreshNotice}
+        {/* The server never stores a snapshot with failed items (persisted: false). */}
         {!persisted && (
           <p className="notice">
-            Not saved yet — {unavailable} {unavailable === 1 ? 'item was' : 'items were'} unavailable.
-            It will be recalculated next time you open the app.
+            Not saved
+            {unavailable > 0 && (
+              <> — {unavailable} {unavailable === 1 ? 'item was' : 'items were'} unavailable</>
+            )}
+            . This month's snapshot is only saved once everything loads; tap Refresh or reopen
+            the app to try again.
           </p>
         )}
       </div>
@@ -118,7 +135,7 @@ export function Home() {
         >
           <span>
             Breakdown <span className="muted">· {items.length} items</span>
-            {unavailable > 0 && <span className="chip chip-warning">{unavailable} unavailable</span>}
+            {unavailable > 0 && <span className="chip chip-neutral">{unavailable} unavailable</span>}
           </span>
           <ChevronIcon open={expanded} />
         </button>

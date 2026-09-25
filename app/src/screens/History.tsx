@@ -13,6 +13,7 @@ export function History() {
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
 
   useEffect(() => {
     api
@@ -27,12 +28,13 @@ export function History() {
   const loadMore = async () => {
     if (!nextBefore) return;
     setLoadingMore(true);
+    setLoadMoreError(null);
     try {
       const res = await api.listSnapshots({ limit: PAGE, before: nextBefore });
       setSnapshots((prev) => [...(prev ?? []), ...res.snapshots]);
       setNextBefore(res.next_before ?? null);
     } catch (e) {
-      setError((e as Error).message);
+      setLoadMoreError((e as Error).message);
     } finally {
       setLoadingMore(false);
     }
@@ -79,9 +81,16 @@ export function History() {
         </ul>
       )}
       {nextBefore && (
-        <button className="button button-ghost load-more" onClick={loadMore} disabled={loadingMore}>
-          {loadingMore ? 'Loading…' : 'Load older'}
-        </button>
+        <div className="load-more">
+          <button className="button button-ghost" onClick={loadMore} disabled={loadingMore}>
+            {loadingMore ? 'Loading…' : loadMoreError ? 'Retry' : 'Load older'}
+          </button>
+          {loadMoreError && (
+            <p className="small load-more-error" role="alert">
+              Couldn't load older snapshots: {loadMoreError}
+            </p>
+          )}
+        </div>
       )}
     </section>
   );

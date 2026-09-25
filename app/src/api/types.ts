@@ -124,6 +124,8 @@ export interface LinkTokenRequest {
   mode: 'new' | 'update';
   institution_id?: string;
   completion_redirect_uri: string;
+  /** Client-generated id, also embedded in completion_redirect_uri. */
+  session_ref: string;
 }
 
 export interface LinkTokenResponse {
@@ -131,6 +133,9 @@ export interface LinkTokenResponse {
   hosted_link_url: string;
   expiration: string;
 }
+
+/** Identify the session by link_token (preferred) or by session_ref (fallback). */
+export type LinkCompleteRequest = { link_token: string } | { session_ref: string };
 
 export interface LinkCompleteResponse {
   status: 'success' | 'exited' | 'pending';
@@ -150,5 +155,5 @@ export interface StateMintApi {
   deleteManualCard(cardId: string): Promise<void>;
   listInstitutions(): Promise<Institution[]>;
   createLinkToken(req: LinkTokenRequest): Promise<LinkTokenResponse>;
-  completeLink(linkToken: string): Promise<LinkCompleteResponse>;
+  completeLink(req: LinkCompleteRequest): Promise<LinkCompleteResponse>;
 }

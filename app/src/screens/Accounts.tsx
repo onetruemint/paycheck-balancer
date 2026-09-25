@@ -5,13 +5,12 @@ import {
   type AccountRole,
   type Institution,
   type InstitutionStatus,
-  type LinkCompleteResponse,
   type ManualCard,
   type ManualCardInput,
 } from '../api';
 import { Spinner } from '../components/Spinner';
 import { centsToInput, money, parseMoney, shortDate } from '../format';
-import { startLink } from '../link';
+import { startLink, type LinkOutcome } from '../link';
 
 const ROLES: { value: AccountRole; label: string }[] = [
   { value: 'paycheck', label: 'Paycheck' },
@@ -28,26 +27,42 @@ const INSTITUTION_STATUS: Record<InstitutionStatus, { label: string; tone: strin
 };
 
 interface Props {
-  linkResult: LinkCompleteResponse | 'completing' | null;
+  linkState: LinkOutcome | 'completing' | null;
+  onRetryLink: () => void;
 }
 
-export function Accounts({ linkResult }: Props) {
+export function Accounts({ linkState, onRetryLink }: Props) {
   const [institutions, setInstitutions] = useState<Institution[] | null>(null);
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [cards, setCards] = useState<ManualCard[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [linking, setLinking] = useState<string | null>(null);
+  const completingLink = linkState === 'completing';
 
+  // Reloads after a link attempt settles, since it may have added or repaired an Item.
   useEffect(() => {
-    if (linkResult === 'completing') return;
+    if (completingLink) return;
+    let cancelled = false; // ignore responses from a superseded load
     Promise.all([api.listInstitutions(), api.listAccounts(), api.listManualCards()])
       .then(([i, a, c]) => {
+        if (cancelled) return;
         setInstitutions(i);
         setAccounts(a);
         setCards(c);
+        setLoadError(null);
       })
-      .catch((e: Error) => setError(e.message));
-  }, [linkResult]);
+      .catch((e: Error) => !cancelled && setLoadError(e.message));
+    return () => {
+      cancelled = true;
+    };
+  }, [completingLink, loadAttempt]);
+
+  const retryLoad = () => {
+    setLoadError(null);
+    setLoadAttempt((n) => n + 1);
+  };
 
   const link = async (mode: 'new' | 'update', institutionId?: string) => {
     setLinking(institutionId ?? 'new');
@@ -61,6 +76,8 @@ export function Accounts({ linkResult }: Props) {
   };
 
   const patchAccount = async (id: string, update: Partial<Account>) => {
+    const previous = accounts?.find((a) => a.id === id);
+    setError(null);
     setAccounts((prev) => prev?.map((a) => (a.id === id ? { ...a, ...update } : a)) ?? null);
     try {
       const saved = await api.updateAccount(id, {
@@ -69,20 +86,32 @@ export function Accounts({ linkResult }: Props) {
       });
       setAccounts((prev) => prev?.map((a) => (a.id === id ? saved : a)) ?? null);
     } catch (e) {
-      setError(`Couldn't save account: ${(e as Error).message}`);
+      // Roll back the optimistic update.
+      if (previous) setAccounts((prev) => prev?.map((a) => (a.id === id ? previous : a)) ?? null);
+      setError(`Couldn't save ${previous?.name ?? 'account'}: ${(e as Error).message}`);
     }
   };
 
-  if (linkResult === 'completing') return <Spinner label="Finishing account link" />;
+  if (completingLink) return <Spinner label="Finishing account link" />;
   if (!institutions || !accounts || !cards) {
-    return error ? <p className="center-stack muted">{error}</p> : <Spinner />;
+    if (!loadError) return <Spinner />;
+    return (
+      <section className="center-stack">
+        {linkState && <LinkBanner state={linkState} onRetry={onRetryLink} />}
+        <p className="muted">Couldn't load accounts.</p>
+        <p className="small muted">{loadError}</p>
+        <button className="button" onClick={retryLoad}>
+          Retry
+        </button>
+      </section>
+    );
   }
 
   return (
     <section className="settings">
       <h1 className="page-title">Accounts &amp; Settings</h1>
 
-      {linkResult && <LinkBanner result={linkResult} />}
+      {linkState && <LinkBanner state={linkState} onRetry={onRetryLink} />}
       {error && <p className="notice notice-danger">{error}</p>}
 
       <div className="card">
@@ -134,12 +163,41 @@ export function Accounts({ linkResult }: Props) {
         )}
       </div>
 
+      {loadError && (
+        <p className="notice notice-danger">
+          Couldn't refresh accounts: {loadError}{' '}
+          <button className="link-button" onClick={retryLoad}>
+            Retry
+          </button>
+        </p>
+      )}
+
       <ManualCards cards={cards} accounts={accounts} onChange={setCards} onError={setError} />
     </section>
   );
 }
 
-function LinkBanner({ result }: { result: LinkCompleteResponse }) {
+function LinkBanner({ state, onRetry }: { state: LinkOutcome; onRetry: () => void }) {
+  const retry = (
+    <button className="link-button" onClick={onRetry}>
+      Retry
+    </button>
+  );
+  if (state.kind === 'no_session') {
+    return (
+      <p className="notice notice-warning">
+        Returned from Plaid, but no link session was found on this device. Please link again.
+      </p>
+    );
+  }
+  if (state.kind === 'error') {
+    return (
+      <p className="notice notice-danger">
+        Couldn't finish linking: {state.message} {retry}
+      </p>
+    );
+  }
+  const { result } = state;
   if (result.status === 'success') {
     return (
       <p className="notice">
@@ -148,13 +206,10 @@ function LinkBanner({ result }: { result: LinkCompleteResponse }) {
       </p>
     );
   }
-  return (
-    <p className="notice notice-warning">
-      {result.status === 'exited'
-        ? 'Linking was cancelled.'
-        : 'Plaid has not finished that session yet. Try linking again.'}
-    </p>
-  );
+  if (result.status === 'exited') {
+    return <p className="notice notice-warning">Linking was cancelled.</p>;
+  }
+  return <p className="notice notice-warning">Plaid hasn't finished that session yet. {retry}</p>;
 }
 
 function accountLabel(a: Account) {
@@ -229,19 +284,16 @@ function ManualCards({ cards, accounts, onChange, onError }: ManualCardsProps) {
   const [editing, setEditing] = useState<ManualCard | 'new' | null>(null);
   const byId = new Map(accounts.map((a) => [a.id, a]));
 
+  // Errors propagate to the form, which shows them inline.
   const save = async (input: ManualCardInput) => {
-    try {
-      if (editing === 'new') {
-        const created = await api.createManualCard(input);
-        onChange([...cards, created]);
-      } else if (editing) {
-        const updated = await api.updateManualCard(editing.id, input);
-        onChange(cards.map((c) => (c.id === updated.id ? updated : c)));
-      }
-      setEditing(null);
-    } catch (e) {
-      onError(`Couldn't save card: ${(e as Error).message}`);
+    if (editing === 'new') {
+      const created = await api.createManualCard(input);
+      onChange([...cards, created]);
+    } else if (editing) {
+      const updated = await api.updateManualCard(editing.id, input);
+      onChange(cards.map((c) => (c.id === updated.id ? updated : c)));
     }
+    setEditing(null);
   };
 
   const remove = async (card: ManualCard) => {
@@ -269,8 +321,9 @@ function ManualCards({ cards, accounts, onChange, onError }: ManualCardsProps) {
       )}
       {cards.length === 0 && editing !== 'new' && <p className="muted">No manual cards.</p>}
       <ul className="rows">
-        {cards.map((c) =>
-          editing !== 'new' && editing?.id === c.id ? (
+        {cards.map((c) => {
+          const linked = c.linked_account_id ? byId.get(c.linked_account_id) : undefined;
+          return editing !== 'new' && editing?.id === c.id ? (
             <li key={c.id} className="row-form">
               <ManualCardForm initial={c} accounts={accounts} onSave={save} onCancel={() => setEditing(null)} />
             </li>
@@ -282,8 +335,11 @@ function ManualCards({ cards, accounts, onChange, onError }: ManualCardsProps) {
                 </span>
                 <span className="small muted">
                   {money(c.statement_balance_cents)} · due {shortDate(c.due_date)}
-                  {c.linked_account_id && byId.get(c.linked_account_id) && (
-                    <> · {accountLabel(byId.get(c.linked_account_id)!)}</>
+                  {linked && (
+                    <>
+                      {' '}
+                      · {accountLabel(linked)} ({money(linked.current_balance_cents)})
+                    </>
                   )}
                 </span>
               </div>
@@ -296,8 +352,8 @@ function ManualCards({ cards, accounts, onChange, onError }: ManualCardsProps) {
                 </button>
               </div>
             </li>
-          ),
-        )}
+          );
+        })}
       </ul>
     </div>
   );
@@ -333,7 +389,8 @@ function ManualCardForm({ initial, accounts, onSave, onCancel }: FormProps) {
       return setProblem('Statement day must be 1–31.');
     setProblem(null);
     setSaving(true);
-    await onSave({
+    try {
+      await onSave({
       name: name.trim(),
       statement_balance_cents: cents,
       statement_date: statementDate || null,
@@ -341,8 +398,12 @@ function ManualCardForm({ initial, accounts, onSave, onCancel }: FormProps) {
       statement_day: day,
       paid,
       linked_account_id: linkedId || null,
-    });
-    setSaving(false);
+      });
+    } catch (err) {
+      setProblem(`Couldn't save card: ${(err as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (

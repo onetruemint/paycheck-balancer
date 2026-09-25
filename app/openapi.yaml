@@ -14,6 +14,8 @@ info:
     The funding-order and statement-status calculation is performed
     entirely server-side (original `requirements.md` §6.3–6.4). The frontend
     only renders the results returned here.
+# LAN-only, no authentication on any operation.
+security: []
 servers:
   - url: http://localhost:{port}
     variables:
@@ -45,18 +47,25 @@ paths:
 
         3. Otherwise fetch transactions / balances / liabilities, auto-pick the
         largest deposit into the Paycheck-role account within the last 3–5
-        days as the paycheck amount, run the calculation, then
-        `INSERT ... ON CONFLICT (month_key) DO NOTHING` and re-select the row
-        (so a concurrent request's winning row is what gets returned).
+        days as the paycheck amount, and run the calculation.
 
-        4. If no qualifying deposit is found, return `state: no_paycheck`
+        4. If every item computed cleanly (no item has a non-null `error`),
+        `INSERT ... ON CONFLICT (month_key) DO NOTHING`, re-select the row (so
+        a concurrent request's winning row is what gets returned) and respond
+        with `persisted: true`.
+
+        5. If **any** item has a non-null `error`, the server MUST NOT insert
+        the snapshot. It still responds `state: ready` with the partial
+        result and `persisted: false`; the next open or Refresh recomputes
+        from scratch (step 1 finds no row).
+
+        6. If no qualifying deposit is found, return `state: no_paycheck`
         and write nothing.
 
 
         A failure fetching one Item must not fail the request: affected
-        entries in `detail.items` carry a non-null `error` and null numbers.
-        See `CurrentSnapshotResponse.persisted` for the open question about
-        persisting partially-failed snapshots.
+        entries in `detail.items` carry a non-null `error` and null numbers,
+        and the rest of the result is still returned (see step 5).
 
 
         POST is used (rather than GET) because the call may write a row.
@@ -172,6 +181,8 @@ paths:
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
 
   /api/manual-cards:
     get:
@@ -209,6 +220,8 @@ paths:
               schema: { $ref: '#/components/schemas/ManualCard' }
         '400':
           $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
 
   /api/manual-cards/{cardId}:
     put:
@@ -232,6 +245,8 @@ paths:
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
     delete:
       operationId: deleteManualCard
       tags: [ManualCards]
@@ -242,6 +257,8 @@ paths:
         '204':
           description: Deleted.
         '404':
+          $ref: '#/components/responses/Error'
+        default:
           $ref: '#/components/responses/Error'
 
   /api/institutions:
@@ -277,8 +294,10 @@ paths:
         Wraps Plaid `/link/token/create` with `hosted_link` enabled and
         `hosted_link.completion_redirect_uri` set to the provided URI.
         `mode: update` passes the Item's access token so Plaid runs update
-        mode (reconnect). The frontend stores `link_token` locally and then
-        navigates to `hosted_link_url`.
+        mode (reconnect). The server must persist `session_ref -> link_token`
+        so `/api/link/complete` can resolve the session by either value. The
+        frontend stores `link_token` locally and then navigates to
+        `hosted_link_url`.
       requestBody:
         required: true
         content:
@@ -291,8 +310,18 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/LinkTokenResponse' }
         '400':
-          $ref: '#/components/responses/Error'
+          description: >-
+            `VALIDATION`: e.g. `institution_id` missing when `mode` is
+            `update`. `PLAID_ERROR`: Plaid rejected `/link/token/create`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
         '404':
+          description: '`NOT_FOUND`: `institution_id` does not match a linked Item.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+        default:
           $ref: '#/components/responses/Error'
 
   /api/link/complete:
@@ -307,16 +336,20 @@ paths:
         public token (`/item/public_token/exchange`), stores the access token
         and imports the Item's accounts (default role `ignored`), all before
         responding. For `update` mode it marks the Item healthy again. No
-        webhook, no async wait. Must be idempotent for the same `link_token`.
+        webhook, no async wait. Must be idempotent for the same session
+        (repeat calls return the same outcome and never exchange twice).
+
+
+        The frontend sends `link_token` when it still has it in local storage
+        and otherwise falls back to the `session_ref` it received back in the
+        return URL (local storage may not survive the trip, e.g. in an iOS
+        home-screen PWA). The frontend only discards its stored token once the
+        outcome is `success` or `exited`; `pending` and errors are retried.
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [link_token]
-              properties:
-                link_token: { type: string }
+            schema: { $ref: '#/components/schemas/LinkCompleteRequest' }
       responses:
         '200':
           description: Session outcome.
@@ -324,6 +357,18 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/LinkCompleteResponse' }
         '400':
+          description: >-
+            `VALIDATION`: neither `link_token` nor `session_ref` given.
+            `PLAID_ERROR`: token exchange failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+        '404':
+          description: '`LINK_SESSION_NOT_FOUND`: unknown or expired `link_token` / `session_ref`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+        default:
           $ref: '#/components/responses/Error'
 
 components:
@@ -346,8 +391,19 @@ components:
       type: object
       required: [message]
       properties:
-        code: { type: string, description: 'Machine-readable code, e.g. NOT_FOUND, VALIDATION, PLAID_ERROR.' }
-        message: { type: string }
+        code:
+          type: string
+          description: >-
+            Machine-readable code. Expected values: `VALIDATION` (400, bad
+            request body or params), `NOT_FOUND` (404, unknown id),
+            `LINK_SESSION_NOT_FOUND` (404, unknown or expired link session),
+            `PLAID_ERROR` (400/502, a Plaid call failed; `message` carries
+            Plaid's error_code), `INTERNAL` (500). Deliberately not an enum
+            so new codes don't break clients.
+          examples: [VALIDATION, NOT_FOUND, LINK_SESSION_NOT_FOUND, PLAID_ERROR, INTERNAL]
+        message:
+          type: string
+          description: Human-readable; the frontend shows it to the user as-is.
 
     MonthKey:
       type: string
@@ -380,11 +436,13 @@ components:
         persisted:
           type: boolean
           description: >-
-            True when the returned snapshot is the stored row. OPEN QUESTION:
-            with `ON CONFLICT DO NOTHING`, a snapshot stored while an Item was
-            failing keeps "Data unavailable" for the whole month. The server
-            may choose to skip the INSERT when any item has an `error` and
-            return `persisted: false`, so the next open retries.
+            `true` when the returned snapshot is the stored `monthly_snapshot`
+            row. `false` when at least one item in `snapshot.detail.items` has
+            a non-null `error`: in that case the server MUST NOT store the
+            snapshot (otherwise `ON CONFLICT DO NOTHING` would freeze "Data
+            unavailable" for the whole month), and the next open or Refresh
+            recomputes. A stored snapshot never contains item errors, so
+            `persisted: false` implies at least one item has an `error`.
 
     CurrentSnapshotNoAccounts:
       type: object
@@ -594,7 +652,16 @@ components:
 
     LinkTokenRequest:
       type: object
-      required: [mode, completion_redirect_uri]
+      required: [mode, completion_redirect_uri, session_ref]
+      description: >-
+        `institution_id` is required when `mode` is `update` (enforced by the
+        if/then below; the server answers 400 `VALIDATION` otherwise).
+      if:
+        properties:
+          mode: { const: update }
+        required: [mode]
+      then:
+        required: [institution_id]
       properties:
         mode:
           type: string
@@ -605,7 +672,17 @@ components:
         completion_redirect_uri:
           type: string
           format: uri
-          description: Where Plaid Hosted Link sends the browser when done.
+          description: >-
+            Where Plaid Hosted Link sends the browser when done. Contains
+            `?link_return=1&ref=<session_ref>`.
+        session_ref:
+          type: string
+          minLength: 16
+          maxLength: 128
+          description: >-
+            Random id generated by the frontend and embedded in
+            `completion_redirect_uri`. The server stores it with the created
+            link token so the session can be completed without the token.
 
     LinkTokenResponse:
       type: object
@@ -614,6 +691,20 @@ components:
         link_token: { type: string }
         hosted_link_url: { type: string, format: uri }
         expiration: { type: string, format: date-time }
+
+    LinkCompleteRequest:
+      description: Identify the session by `link_token` (preferred) or `session_ref` (fallback).
+      oneOf:
+        - type: object
+          required: [link_token]
+          properties:
+            link_token: { type: string }
+          additionalProperties: false
+        - type: object
+          required: [session_ref]
+          properties:
+            session_ref: { type: string }
+          additionalProperties: false
 
     LinkCompleteResponse:
       type: object

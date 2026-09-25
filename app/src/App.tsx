@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { isMock, type LinkCompleteResponse } from './api';
+import { isMock } from './api';
 import { Drawer } from './components/Drawer';
 import { MenuIcon, MoonIcon, SunIcon } from './components/Icons';
-import { completePendingLink } from './link';
+import { completePendingLink, type LinkOutcome } from './link';
 import { useRoute } from './router';
 import { Accounts } from './screens/Accounts';
 import { History } from './screens/History';
@@ -14,17 +14,16 @@ export function App({ linkReturn }: { linkReturn: boolean }) {
   const [theme, toggleTheme] = useTheme();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const closeDrawer = useCallback(() => setDrawerOpen(false), []);
-  const [linkResult, setLinkResult] = useState<LinkCompleteResponse | 'completing' | null>(
+  const [linkState, setLinkState] = useState<LinkOutcome | 'completing' | null>(
     linkReturn ? 'completing' : null,
   );
+  const retryLink = useCallback(() => setLinkState('completing'), []);
 
   // Returning from Plaid Hosted Link: complete the session before showing Accounts.
   useEffect(() => {
-    if (linkResult !== 'completing') return;
-    completePendingLink()
-      .then((res) => setLinkResult(res ?? { status: 'pending' }))
-      .catch(() => setLinkResult({ status: 'pending' }));
-  }, [linkResult]);
+    if (linkState !== 'completing') return;
+    completePendingLink().then(setLinkState);
+  }, [linkState]);
 
   return (
     <>
@@ -47,7 +46,7 @@ export function App({ linkReturn }: { linkReturn: boolean }) {
       <main className="content">
         {route === 'home' && <Home />}
         {route === 'history' && <History />}
-        {route === 'accounts' && <Accounts linkResult={linkResult} />}
+        {route === 'accounts' && <Accounts linkState={linkState} onRetryLink={retryLink} />}
       </main>
     </>
   );

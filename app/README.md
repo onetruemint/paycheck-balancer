@@ -10,11 +10,12 @@ calculation, and `monthly_snapshot` insert all happen server-side.
 ## Run
 
 ```bash
-npm install
+pnpm install         # from the repo root (pnpm workspace)
 npm run dev:mock     # no backend needed; in-browser mock API
 npm run dev          # live mode; set VITE_API_PROXY_TARGET or VITE_API_BASE_URL in .env.local
 npm run build        # type-check + production build to dist/
 npm run preview      # serve dist/
+npm run lint         # currently a strict type-check (no ESLint deps yet; root config ignores app/)
 ```
 
 ## Configuration (copy `env.example` to `.env.local`)

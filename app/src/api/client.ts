@@ -5,6 +5,7 @@ import type {
   CurrentSnapshotResponse,
   Institution,
   LinkCompleteResponse,
+  LinkCompleteRequest,
   LinkTokenRequest,
   LinkTokenResponse,
   ManualCard,
@@ -39,12 +40,19 @@ export function createHttpApi(baseUrl: string): StateMintApi {
     if (res.status === 204) return undefined as T;
     const text = await res.text();
     let json: unknown = null;
+    let parsed = true;
     try {
       json = text ? JSON.parse(text) : null;
     } catch {
-      // Non-JSON body (e.g. proxy error page).
+      parsed = false; // Non-JSON body (e.g. proxy error page, or an SPA fallback index.html).
     }
     if (!res.ok) throw new ApiRequestError(res.status, json as Partial<ApiError> | null);
+    if (!parsed || json === null) {
+      throw new ApiRequestError(res.status, {
+        code: 'BAD_RESPONSE',
+        message: `Unexpected response from ${path} — is the API running?`,
+      });
+    }
     return json as T;
   }
 
@@ -89,7 +97,7 @@ export function createHttpApi(baseUrl: string): StateMintApi {
     createLinkToken: (req: LinkTokenRequest) =>
       request<LinkTokenResponse>('POST', '/api/link/token', req),
 
-    completeLink: (linkToken: string) =>
-      request<LinkCompleteResponse>('POST', '/api/link/complete', { link_token: linkToken }),
+    completeLink: (req: LinkCompleteRequest) =>
+      request<LinkCompleteResponse>('POST', '/api/link/complete', req),
   };
 }
