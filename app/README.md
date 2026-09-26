@@ -1,56 +1,55 @@
-# Welcome to your Expo app 👋
+# StateMint (frontend)
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+React + Vite PWA for the local-only paycheck transfer calculator. See
+[`frontend-requirements.md`](./frontend-requirements.md) for the product spec and
+[`openapi.yaml`](./openapi.yaml) for the backend contract the app expects.
 
-## Get started
+The frontend only **displays** results. The paycheck auto-pick, funding
+calculation, and `monthly_snapshot` insert all happen server-side.
 
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Run
 
 ```bash
-npm run reset-project
+pnpm install         # from the repo root (pnpm workspace)
+npm run dev:mock     # no backend needed; in-browser mock API
+npm run dev          # live mode; set VITE_API_PROXY_TARGET or VITE_API_BASE_URL in .env.local
+npm run build        # type-check + production build to dist/
+npm run preview      # serve dist/
+npm run lint         # currently a strict type-check (no ESLint deps yet; root config ignores app/)
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## Configuration (copy `env.example` to `.env.local`)
 
-### Other setup steps
+| Variable | Meaning |
+|---|---|
+| `VITE_API_MODE` | `live` (default) or `mock`. `npm run dev:mock` (Vite `--mode mock`) always uses the mock. |
+| `VITE_API_BASE_URL` | API origin, e.g. `http://homelab.local:8080`. Leave empty for same-origin `/api`. |
+| `VITE_API_PROXY_TARGET` | Dev server only: proxy `/api` to this origin. |
+| `VITE_MOCK_SCENARIO` | Default mock scenario (see below). |
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+## Mock scenarios
 
-## Learn more
+Choose a scenario from the drawer (mock mode only) or with `?mock=<name>`:
 
-To learn more about developing your project with Expo, look at the following resources:
+- `default`: healthy accounts plus 5 months of history
+- `item_failure`: one Item needs reconnecting, so its row shows "Data unavailable" and the snapshot is not persisted
+- `empty`: nothing linked, so Home shows "Link account to get started"
+- `no_paycheck`: accounts exist but no qualifying deposit was found
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+The mock's "Hosted Link" redirects straight back to the app and completes. Mock
+state lives in `localStorage` so that it survives that redirect.
 
-## Join the community
+## Structure
 
-Join our community of developers creating universal apps.
+```
+src/api/types.ts    types mirroring openapi.yaml
+src/api/client.ts   fetch-based client
+src/api/mock.ts     mock implementation + scenarios
+src/link.ts         Plaid Hosted Link redirect flow
+src/screens/        Home, History, Accounts
+src/styles.css      all styling (CSS custom properties; .theme-light / .theme-dark)
+scripts/generate-icons.mjs   regenerates the placeholder PWA icons (npm run icons)
+```
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Routing is hash-based (`#/`, `#/history`, `#/accounts`), so `dist/` can be served by
+any static server with no SPA fallback.
