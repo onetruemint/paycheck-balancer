@@ -36,8 +36,8 @@ Choose a scenario from the drawer (mock mode only) or with `?mock=<name>`:
 - `empty`: nothing linked, so Home shows "Link account to get started"
 - `no_paycheck`: accounts exist but no qualifying deposit was found
 
-The mock's "Hosted Link" redirects straight back to the app and completes. Mock
-state lives in `localStorage` so that it survives that redirect.
+The mock skips the real Plaid Link UI entirely and resolves immediately. Mock
+state lives in `localStorage`.
 
 ## Structure
 
@@ -45,7 +45,7 @@ state lives in `localStorage` so that it survives that redirect.
 src/api/types.ts    types mirroring openapi.yaml
 src/api/client.ts   fetch-based client
 src/api/mock.ts     mock implementation + scenarios
-src/link.ts         Plaid Hosted Link redirect flow
+src/link.ts         classic Plaid Link hook (usePlaidLinkFlow)
 src/screens/        Home, History, Accounts
 src/styles.css      all styling (CSS custom properties; .theme-light / .theme-dark)
 scripts/generate-icons.mjs   regenerates the placeholder PWA icons (npm run icons)

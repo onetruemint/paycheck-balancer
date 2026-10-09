@@ -89,9 +89,10 @@ Denser and more form-heavy than Home is acceptable — this screen is visited ra
 - List with status
 - **Reconnect** button on any institution needing it
 
-**Linking / reconnecting (Plaid Hosted Link):**
-- Initiate via `/link/token/create` (new mode for linking, update mode for reconnect)
-- On redirect back to the app, the app calls the local API, which checks the Hosted Link session status and completes the token exchange **synchronously** — no webhook, no async wait
+**Linking / reconnecting (classic Plaid Link, client-side):**
+- The app opens Plaid Link in-page via the `react-plaid-link` SDK, using a `link_token` from `POST /api/create_link_token` (omit `itemId` to link a new institution; pass the Item's id to run Link in update mode for reconnect)
+- On Link's `onSuccess`, the app sends the `publicToken` to `POST /api/get_access_token`, which exchanges it for an access token **synchronously** and stores it server-side — the client never sees it, and there's no webhook or async wait
+- Update mode doesn't mint a new access token, so reconnect only needs Link to succeed — no second API call
 - No Item slot counter (warn/refuse) and no duplicate-institution guard — not needed for a single manual user
 
 ## 9. Data model
@@ -132,6 +133,7 @@ SELECT * FROM monthly_snapshot WHERE month_key = $1;
 - Push notifications and delivery tracking
 - Automated paycheck detection, learned pay schedule, missed-paycheck alerts
 - Webhook receiver (Plaid webhooks) — replaced by query-on-open
+- OAuth-only institutions in Link (would need a registered `redirect_uri` and re-invoking Link with `receivedRedirectUri`) — not supported yet
 - Manual card monthly reminder
 - Item slot counter / duplicate-link guard
 - Login / auth (Cognito, passkeys, JWT sessions)
