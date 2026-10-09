@@ -121,25 +121,21 @@ export interface Institution {
 }
 
 export interface LinkTokenRequest {
-  mode: 'new' | 'update';
-  institution_id?: string;
-  completion_redirect_uri: string;
-  /** Client-generated id, also embedded in completion_redirect_uri. */
-  session_ref: string;
+  /** Plaid Item id to reconnect; omit to link a new institution. */
+  itemId?: string;
 }
 
 export interface LinkTokenResponse {
   link_token: string;
-  hosted_link_url: string;
   expiration: string;
 }
 
-/** Identify the session by link_token (preferred) or by session_ref (fallback). */
-export type LinkCompleteRequest = { link_token: string } | { session_ref: string };
+export interface LinkExchangeRequest {
+  publicToken: string;
+}
 
-export interface LinkCompleteResponse {
-  status: 'success' | 'exited' | 'pending';
-  institution?: Institution | null;
+export interface LinkExchangeResponse {
+  item_id: string;
 }
 
 /** The full surface the UI depends on. Implemented by the HTTP client and the mock. */
@@ -155,5 +151,5 @@ export interface StateMintApi {
   deleteManualCard(cardId: string): Promise<void>;
   listInstitutions(): Promise<Institution[]>;
   createLinkToken(req: LinkTokenRequest): Promise<LinkTokenResponse>;
-  completeLink(req: LinkCompleteRequest): Promise<LinkCompleteResponse>;
+  exchangeLinkToken(req: LinkExchangeRequest): Promise<LinkExchangeResponse>;
 }
