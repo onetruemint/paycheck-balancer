@@ -5,6 +5,7 @@ import {
   PlaidApi,
   Products,
 } from 'plaid';
+import { isAxiosError } from 'axios';
 import { ConfigDecorator, Decorators } from '../utils/utils.js';
 import { getAccessTokenForItem, saveAccessToken } from '../utils/itemStore.js';
 import moment from 'moment';
@@ -20,9 +21,22 @@ export async function getHealth(request: FastifyRequest, reply: FastifyReply) {
   reply.send('Server is alive and well!');
 }
 
+interface PlaidErrorBody {
+  error_code?: string;
+  error_message?: string;
+  display_message?: string | null;
+}
+
 function plaidError(e: unknown): ApiError {
   if (e instanceof RequiredError) {
     return { code: 'VALIDATION', message: e.message };
+  }
+  if (isAxiosError(e) && e.response?.data) {
+    const data = e.response.data as PlaidErrorBody;
+    if (data.error_code) {
+      const detail = data.display_message || data.error_message || e.message;
+      return { code: 'PLAID_ERROR', message: `${data.error_code}: ${detail}` };
+    }
   }
   return { code: 'PLAID_ERROR', message: e instanceof Error ? e.message : String(e) };
 }
@@ -42,7 +56,6 @@ export function createLinkToken(client: PlaidApi, fastify: FastifyInstance) {
       client_name: 'Paycheck Balancer',
       country_codes: config.countryCodes,
       language: 'en',
-      products: config.products,
     };
 
     if (itemId) {
@@ -55,13 +68,17 @@ export function createLinkToken(client: PlaidApi, fastify: FastifyInstance) {
         return;
       }
       configs.access_token = accessToken;
-    }
-
-    if (config.products.includes(Products.Statements)) {
-      configs.statements = {
-        start_date: moment().subtract(30, 'days').format('YYYY-MM-DD'),
-        end_date: moment().format('YYYY-MM-DD'),
-      };
+    } else {
+      // Plaid's own guidance: omit `products` (and anything product-specific,
+      // like `statements`) in update mode unless deliberately adding a product
+      // to an existing Item — which this app never does.
+      configs.products = config.products;
+      if (config.products.includes(Products.Statements)) {
+        configs.statements = {
+          start_date: moment().subtract(30, 'days').format('YYYY-MM-DD'),
+          end_date: moment().format('YYYY-MM-DD'),
+        };
+      }
     }
 
     try {

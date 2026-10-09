@@ -1,9 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { PlaidApi } from 'plaid';
+import { Products } from 'plaid';
 import { createLinkToken, getAccessToken } from './controller.js';
 import { Decorators, type ConfigDecorator } from '../utils/utils.js';
 import { saveAccessToken } from '../utils/itemStore.js';
+
+function fakeAxiosError(status: number, data: unknown): Error {
+  return Object.assign(new Error(`Request failed with status code ${status}`), {
+    isAxiosError: true,
+    response: { status, data },
+  });
+}
 
 function fakeReply() {
   const sent: { status: number; body: unknown }[] = [];
@@ -85,6 +93,45 @@ describe('createLinkToken', () => {
       expect.objectContaining({ access_token: 'access-secret' })
     );
   });
+
+  it('omits products and statements in update mode', async () => {
+    saveAccessToken('item-known-2', 'access-secret-4');
+    const linkTokenCreate = vi.fn().mockResolvedValue({
+      data: { link_token: 'tok-789', expiration: '2026-01-01T00:00:00Z', request_id: 'req-3' },
+    });
+    const client = { linkTokenCreate } as unknown as PlaidApi;
+    const configWithStatements: ConfigDecorator = { ...baseConfig, products: [Products.Statements] };
+    const handler = createLinkToken(client, fakeFastify(configWithStatements));
+    const { reply } = fakeReply();
+
+    await handler({ body: { itemId: 'item-known-2' } } as never, reply);
+
+    const sentConfig = linkTokenCreate.mock.calls[0][0];
+    expect(sentConfig.products).toBeUndefined();
+    expect(sentConfig.statements).toBeUndefined();
+  });
+
+  it('replies with PLAID_ERROR carrying Plaid\'s own error_code in the message', async () => {
+    const linkTokenCreate = vi
+      .fn()
+      .mockRejectedValue(
+        fakeAxiosError(400, {
+          error_type: 'INVALID_REQUEST',
+          error_code: 'INVALID_FIELD',
+          error_message: 'client_user_id is required',
+          display_message: null,
+        })
+      );
+    const client = { linkTokenCreate } as unknown as PlaidApi;
+    const handler = createLinkToken(client, fakeFastify(baseConfig));
+    const { reply, sent } = fakeReply();
+
+    await handler({ body: {} } as never, reply);
+
+    expect(sent).toEqual([
+      { status: 400, body: { code: 'PLAID_ERROR', message: 'INVALID_FIELD: client_user_id is required' } },
+    ]);
+  });
 });
 
 describe('getAccessToken', () => {
@@ -126,5 +173,31 @@ describe('getAccessToken', () => {
     await handler({ body: { publicToken: 'public-bad' } } as never, reply);
 
     expect(sent).toEqual([{ status: 400, body: { code: 'PLAID_ERROR', message: 'bad token' } }]);
+  });
+
+  it('surfaces Plaid\'s own error code/message from an Axios-shaped rejection', async () => {
+    const itemPublicTokenExchange = vi.fn().mockRejectedValue(
+      fakeAxiosError(400, {
+        error_type: 'INVALID_INPUT',
+        error_code: 'INVALID_PUBLIC_TOKEN',
+        error_message: 'provided public token is in an invalid format',
+        display_message: 'This link has expired. Please try linking again.',
+      })
+    );
+    const client = { itemPublicTokenExchange } as unknown as PlaidApi;
+    const handler = getAccessToken(client);
+    const { reply, sent } = fakeReply();
+
+    await handler({ body: { publicToken: 'public-expired' } } as never, reply);
+
+    expect(sent).toEqual([
+      {
+        status: 400,
+        body: {
+          code: 'PLAID_ERROR',
+          message: 'INVALID_PUBLIC_TOKEN: This link has expired. Please try linking again.',
+        },
+      },
+    ]);
   });
 });

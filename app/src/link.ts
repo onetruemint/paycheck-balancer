@@ -12,8 +12,29 @@ function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-function exitMessage(error: PlaidLinkError | null): string {
-  return error?.error_message || error?.display_message || 'Link closed with an error.';
+function exitMessage(error: PlaidLinkError): string {
+  return error.error_message || error.display_message || 'Link closed with an error.';
+}
+
+/** `onExit` fires with `error: null` on a plain user-initiated close — that's a cancel, not a failure. */
+export function exitOutcome(error: PlaidLinkError | null): LinkOutcome {
+  return error ? { kind: 'error', message: exitMessage(error) } : { kind: 'exited' };
+}
+
+/** Update-mode Link doesn't mint a new access token, so there is nothing to exchange. */
+export function shouldExchangeOnSuccess(mode: 'new' | 'update'): boolean {
+  return mode === 'new';
+}
+
+/**
+ * `usePlaidLink` loads Plaid's script unconditionally; if that load fails
+ * (offline, blocked), its `error` becomes non-null and `ready` never turns
+ * true, so `open()` is never called. Without this, the caller is left
+ * showing "Opening Plaid…" forever with no way out but a reload.
+ */
+export function scriptLoadErrorOutcome(error: ErrorEvent | null): LinkOutcome | null {
+  if (!error) return null;
+  return { kind: 'error', message: "Couldn't load Plaid Link. Check your connection and try again." };
 }
 
 /**
@@ -28,9 +49,7 @@ export function usePlaidLinkFlow() {
   const modeRef = useRef<'new' | 'update'>('new');
 
   const finishLink = useCallback(async (publicToken: string) => {
-    if (modeRef.current === 'update') {
-      // Update-mode Link doesn't mint a new access token, so there is
-      // nothing to exchange — Link succeeding is the whole story.
+    if (!shouldExchangeOnSuccess(modeRef.current)) {
       setOutcome({ kind: 'reconnected' });
     } else {
       try {
@@ -84,10 +103,10 @@ export function usePlaidLinkFlow() {
   const onExit = useCallback((error: PlaidLinkError | null) => {
     setToken(null);
     setLinking(null);
-    setOutcome(error ? { kind: 'error', message: exitMessage(error) } : { kind: 'exited' });
+    setOutcome(exitOutcome(error));
   }, []);
 
-  const { open, ready } = usePlaidLink({
+  const { open, ready, error: scriptError } = usePlaidLink({
     token: isMock ? null : token,
     onSuccess,
     onExit,
@@ -96,6 +115,17 @@ export function usePlaidLinkFlow() {
   useEffect(() => {
     if (!isMock && ready && token) open();
   }, [ready, token, open]);
+
+  // A failed script load leaves `ready` false forever with no other signal.
+  useEffect(() => {
+    if (isMock || !token) return;
+    const failure = scriptLoadErrorOutcome(scriptError);
+    if (failure) {
+      setOutcome(failure);
+      setLinking(null);
+      setToken(null);
+    }
+  }, [scriptError, token]);
 
   return { start, linking, outcome, clearOutcome: () => setOutcome(null) };
 }
