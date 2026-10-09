@@ -10,7 +10,7 @@ import {
 } from '../api';
 import { Spinner } from '../components/Spinner';
 import { centsToInput, money, parseMoney, shortDate } from '../format';
-import { startLink, type LinkOutcome } from '../link';
+import { usePlaidLinkFlow, type LinkOutcome } from '../link';
 
 const ROLES: { value: AccountRole; label: string }[] = [
   { value: 'paycheck', label: 'Paycheck' },
@@ -26,24 +26,17 @@ const INSTITUTION_STATUS: Record<InstitutionStatus, { label: string; tone: strin
   error: { label: 'Error', tone: 'danger' },
 };
 
-interface Props {
-  linkState: LinkOutcome | 'completing' | null;
-  onRetryLink: () => void;
-}
-
-export function Accounts({ linkState, onRetryLink }: Props) {
+export function Accounts() {
   const [institutions, setInstitutions] = useState<Institution[] | null>(null);
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [cards, setCards] = useState<ManualCard[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
-  const [linking, setLinking] = useState<string | null>(null);
-  const completingLink = linkState === 'completing';
+  const { start, linking, outcome, clearOutcome } = usePlaidLinkFlow();
 
   // Reloads after a link attempt settles, since it may have added or repaired an Item.
   useEffect(() => {
-    if (completingLink) return;
     let cancelled = false; // ignore responses from a superseded load
     Promise.all([api.listInstitutions(), api.listAccounts(), api.listManualCards()])
       .then(([i, a, c]) => {
@@ -57,22 +50,11 @@ export function Accounts({ linkState, onRetryLink }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [completingLink, loadAttempt]);
+  }, [loadAttempt, outcome]);
 
   const retryLoad = () => {
     setLoadError(null);
     setLoadAttempt((n) => n + 1);
-  };
-
-  const link = async (mode: 'new' | 'update', institutionId?: string) => {
-    setLinking(institutionId ?? 'new');
-    setError(null);
-    try {
-      await startLink(mode, institutionId);
-    } catch (e) {
-      setError(`Couldn’t start Plaid Link: ${(e as Error).message}. Try again in a moment.`);
-      setLinking(null);
-    }
   };
 
   const patchAccount = async (id: string, update: Partial<Account>) => {
@@ -92,12 +74,11 @@ export function Accounts({ linkState, onRetryLink }: Props) {
     }
   };
 
-  if (completingLink) return <Spinner label="Finishing account link" />;
   if (!institutions || !accounts || !cards) {
     if (!loadError) return <Spinner />;
     return (
       <section className="center-stack">
-        {linkState && <LinkBanner state={linkState} onRetry={onRetryLink} />}
+        {outcome && <LinkBanner outcome={outcome} onDismiss={clearOutcome} />}
         <h1 className="empty-title">Couldn’t load accounts</h1>
         <p className="muted">Check that the home server is running, then retry.</p>
         <p className="small muted">{loadError}</p>
@@ -112,7 +93,7 @@ export function Accounts({ linkState, onRetryLink }: Props) {
     <section className="settings">
       <h1 className="page-title">Accounts &amp; Settings</h1>
 
-      {linkState && <LinkBanner state={linkState} onRetry={onRetryLink} />}
+      {outcome && <LinkBanner outcome={outcome} onDismiss={clearOutcome} />}
       {error && (
         <p className="notice notice-danger" role="alert">
           {error}
@@ -122,7 +103,7 @@ export function Accounts({ linkState, onRetryLink }: Props) {
       <div className="card">
         <div className="section-head">
           <h2>Institutions</h2>
-          <button className="button button-primary" onClick={() => link('new')} disabled={!!linking}>
+          <button className="button button-primary" onClick={() => start('new')} disabled={!!linking}>
             {linking === 'new' ? 'Opening Plaid…' : 'Link Account'}
           </button>
         </div>
@@ -147,7 +128,7 @@ export function Accounts({ linkState, onRetryLink }: Props) {
                   {inst.status !== 'healthy' && (
                     <button
                       className="button button-small"
-                      onClick={() => link('update', inst.id)}
+                      onClick={() => start('update', inst.id)}
                       disabled={!!linking}
                       aria-label={`Reconnect ${inst.name}`}
                     >
@@ -188,37 +169,27 @@ export function Accounts({ linkState, onRetryLink }: Props) {
   );
 }
 
-function LinkBanner({ state, onRetry }: { state: LinkOutcome; onRetry: () => void }) {
-  const retry = (
-    <button className="link-button" onClick={onRetry}>
-      Retry
+function LinkBanner({ outcome, onDismiss }: { outcome: LinkOutcome; onDismiss: () => void }) {
+  const dismiss = (
+    <button className="link-button" onClick={onDismiss}>
+      Dismiss
     </button>
   );
-  if (state.kind === 'no_session') {
-    return (
-      <p className="notice notice-warning" role="status">
-        Returned from Plaid, but this device has no record of the link session. Tap Link Account
-        to start again.
-      </p>
-    );
-  }
-  if (state.kind === 'error') {
-    return (
-      <p className="notice notice-danger" role="alert">
-        Couldn’t finish linking: {state.message} {retry}
-      </p>
-    );
-  }
-  const { result } = state;
-  if (result.status === 'success') {
+  if (outcome.kind === 'success') {
     return (
       <p className="notice notice-success" role="status">
-        {result.institution ? `${result.institution.name} linked.` : 'Account linked.'} Set each
-        account’s role below.
+        Account linked. Set each account’s role below. {dismiss}
       </p>
     );
   }
-  if (result.status === 'exited') {
+  if (outcome.kind === 'reconnected') {
+    return (
+      <p className="notice notice-success" role="status">
+        Institution reconnected. {dismiss}
+      </p>
+    );
+  }
+  if (outcome.kind === 'exited') {
     return (
       <p className="notice notice-warning" role="status">
         Linking was cancelled. Nothing changed.
@@ -226,8 +197,8 @@ function LinkBanner({ state, onRetry }: { state: LinkOutcome; onRetry: () => voi
     );
   }
   return (
-    <p className="notice notice-warning" role="status">
-      Plaid hasn’t finished that session yet. {retry}
+    <p className="notice notice-danger" role="alert">
+      Couldn’t finish linking: {outcome.message} {dismiss}
     </p>
   );
 }
