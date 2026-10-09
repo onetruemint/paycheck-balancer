@@ -36,6 +36,9 @@ const PLAID_VERSION = getEnvVar('PLAID_VERSION', { default: '2020-09-14' });
 const PLAID_ANDROID_PACKAGE_NAME = getEnvVar('PLAID_ANDROID_PACKAGE_NAME', {
   default: '',
 });
+const PLAID_CLIENT_USER_ID = getEnvVar('PLAID_CLIENT_USER_ID', {
+  default: 'statemint-local-user',
+});
 
 export default function PlaidApp(): FastifyInstance {
   const plaidConfig = new Configuration({
@@ -53,6 +56,7 @@ export default function PlaidApp(): FastifyInstance {
     products: PLAID_PRODUCTS,
     countryCodes: PLAID_COUNTRY_CODES,
     androidPackageName: PLAID_ANDROID_PACKAGE_NAME,
+    clientUserId: PLAID_CLIENT_USER_ID,
   };
 
   const client = new PlaidApi(plaidConfig);
