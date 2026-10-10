@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
+import { useCallback, useRef, useState, type MouseEvent } from 'react';
 import { isMock } from './api';
 import { Drawer } from './components/Drawer';
 import { MenuIcon, MoonIcon, SunIcon } from './components/Icons';
-import { completePendingLink, type LinkOutcome } from './link';
 import { useRoute } from './router';
 import { Accounts } from './screens/Accounts';
 import { History } from './screens/History';
@@ -15,22 +14,12 @@ function skipToMain(e: MouseEvent) {
   document.getElementById('main')?.focus();
 }
 
-export function App({ linkReturn }: { linkReturn: boolean }) {
+export function App() {
   const route = useRoute();
   const [theme, toggleTheme] = useTheme();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const closeDrawer = useCallback(() => setDrawerOpen(false), []);
-  const [linkState, setLinkState] = useState<LinkOutcome | 'completing' | null>(
-    linkReturn ? 'completing' : null,
-  );
-  const retryLink = useCallback(() => setLinkState('completing'), []);
   const menuButton = useRef<HTMLButtonElement>(null);
-
-  // Returning from Plaid Hosted Link: complete the session before showing Accounts.
-  useEffect(() => {
-    if (linkState !== 'completing') return;
-    completePendingLink().then(setLinkState);
-  }, [linkState]);
 
   return (
     <>
@@ -63,7 +52,7 @@ export function App({ linkReturn }: { linkReturn: boolean }) {
       <main id="main" className="content" tabIndex={-1}>
         {route === 'home' && <Home />}
         {route === 'history' && <History />}
-        {route === 'accounts' && <Accounts linkState={linkState} onRetryLink={retryLink} />}
+        {route === 'accounts' && <Accounts />}
       </main>
     </>
   );

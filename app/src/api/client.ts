@@ -4,8 +4,8 @@ import type {
   ApiError,
   CurrentSnapshotResponse,
   Institution,
-  LinkCompleteResponse,
-  LinkCompleteRequest,
+  LinkExchangeRequest,
+  LinkExchangeResponse,
   LinkTokenRequest,
   LinkTokenResponse,
   ManualCard,
@@ -95,9 +95,9 @@ export function createHttpApi(baseUrl: string): StateMintApi {
       (await request<{ institutions: Institution[] }>('GET', '/api/institutions')).institutions,
 
     createLinkToken: (req: LinkTokenRequest) =>
-      request<LinkTokenResponse>('POST', '/api/link/token', req),
+      request<LinkTokenResponse>('POST', '/api/create_link_token', req),
 
-    completeLink: (req: LinkCompleteRequest) =>
-      request<LinkCompleteResponse>('POST', '/api/link/complete', req),
+    exchangeLinkToken: (req: LinkExchangeRequest) =>
+      request<LinkExchangeResponse>('POST', '/api/get_access_token', req),
   };
 }

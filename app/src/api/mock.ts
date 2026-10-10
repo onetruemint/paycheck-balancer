@@ -6,7 +6,6 @@ import type {
   Account,
   CurrentSnapshotResponse,
   Institution,
-  LinkCompleteResponse,
   ManualCard,
   Snapshot,
   SnapshotItem,
@@ -17,7 +16,7 @@ export const MOCK_SCENARIOS = ['default', 'item_failure', 'empty', 'no_paycheck'
 export type MockScenario = (typeof MOCK_SCENARIOS)[number];
 
 const SCENARIO_KEY = 'statemint.mockScenario';
-// Mock state is persisted so it survives the full-page Hosted Link redirect.
+// Mock state is persisted so it survives a page reload.
 const WORLD_KEY = 'statemint.mockWorld';
 
 export function getMockScenario(): MockScenario {
@@ -226,8 +225,6 @@ interface World {
   manualCards: ManualCard[];
   snapshots: Snapshot[]; // stored rows, any order
   pendingCurrent: CurrentSnapshotResponse;
-  linkSessions?: Record<string, string>; // session_ref -> link_token
-  completedLinks?: Record<string, LinkCompleteResponse>; // link_token -> result (idempotency)
 }
 
 function buildWorld(scenario: MockScenario): World {
@@ -364,79 +361,59 @@ export function createMockApi(): StateMintApi {
       return clone(world.institutions);
     },
 
-    async createLinkToken(req) {
+    async createLinkToken({ itemId }) {
       await delay(300);
-      if (req.mode === 'update' && !req.institution_id) {
-        fail(400, 'VALIDATION', 'institution_id is required when mode is update');
+      if (itemId) {
+        const inst = world.institutions.find((i) => i.id === itemId) ?? notFound('Institution');
+        // Mock mode skips the real Plaid Link UI (see src/link.ts), so there's no
+        // separate "Link succeeded" moment to hook into for update mode — simulate
+        // the reconnect repair here instead, as soon as a token is requested for it.
+        inst.status = 'healthy';
+        inst.status_detail = null;
+        inst.last_success_at = new Date().toISOString();
+        if (world.pendingCurrent.state === 'ready') {
+          world.pendingCurrent = { state: 'ready', snapshot: snapshotFor(monthKey(0), 0), persisted: true };
+        }
       }
-      const token = `link-sandbox-mock-${req.mode}-${req.institution_id ?? 'new'}-${Date.now()}`;
-      (world.linkSessions ??= {})[req.session_ref] = token;
-      // Skip the real Plaid page: "Hosted Link" immediately redirects back.
       return {
-        link_token: token,
-        hosted_link_url: req.completion_redirect_uri,
+        link_token: `link-sandbox-mock-${itemId ?? 'new'}-${Date.now()}`,
         expiration: new Date(Date.now() + 4 * 3600_000).toISOString(),
       };
     },
 
-    async completeLink(req) {
+    async exchangeLinkToken() {
       await delay(800);
-      const linkToken =
-        'link_token' in req
-          ? req.link_token
-          : (world.linkSessions?.[req.session_ref] ??
-            fail(404, 'LINK_SESSION_NOT_FOUND', 'No link session matches this reference.'));
-      const done = world.completedLinks?.[linkToken];
-      if (done) return clone(done);
-      const result = await completeOnce(linkToken);
-      (world.completedLinks ??= {})[linkToken] = result;
-      return clone(result);
+      if (scenario === 'empty') {
+        scenario = 'default';
+        setMockScenario(scenario);
+        world = buildWorld(scenario);
+        return { item_id: world.institutions[0].id };
+      }
+      const inst: Institution = {
+        id: `item_new_${idSeq++}`,
+        plaid_institution_id: 'ins_12',
+        name: 'Capital One',
+        status: 'healthy',
+        status_detail: null,
+        last_success_at: new Date().toISOString(),
+      };
+      world.institutions.push(inst);
+      world.accounts.push({
+        id: `acc_new_${idSeq++}`,
+        institution_id: inst.id,
+        institution_name: inst.name,
+        name: 'Venture X',
+        official_name: null,
+        mask: '6614',
+        type: 'credit',
+        subtype: 'credit card',
+        current_balance_cents: 23_410,
+        role: 'ignored',
+        target_balance_cents: null,
+      });
+      return { item_id: inst.id };
     },
   };
-
-  async function completeOnce(linkToken: string): Promise<LinkCompleteResponse> {
-    const [, , , mode, ...rest] = linkToken.split('-');
-    if (mode === 'update') {
-      const itemId = rest.slice(0, -1).join('-');
-      const inst = world.institutions.find((i) => i.id === itemId) ?? notFound('Institution');
-      inst.status = 'healthy';
-      inst.status_detail = null;
-      inst.last_success_at = new Date().toISOString();
-      // A repaired Item means the next open can compute a clean snapshot.
-      if (world.pendingCurrent.state === 'ready') {
-        world.pendingCurrent = { state: 'ready', snapshot: snapshotFor(monthKey(0), 0), persisted: true };
-      }
-      return { status: 'success', institution: clone(inst) };
-    }
-    // New link: in the empty scenario, jump to the populated demo world.
-    if (scenario === 'empty') {
-      scenario = 'default';
-      setMockScenario(scenario);
-      world = buildWorld(scenario);
-      return { status: 'success', institution: clone(world.institutions[0]) };
-    }
-    const inst: Institution = {
-      id: `item_new_${idSeq++}`,
-      name: 'Capital One',
-      status: 'healthy',
-      status_detail: null,
-      last_success_at: new Date().toISOString(),
-    };
-    world.institutions.push(inst);
-    world.accounts.push({
-      id: `acc_new_${idSeq++}`,
-      institution_id: inst.id,
-      institution_name: inst.name,
-      name: 'Venture X',
-      mask: '6614',
-      type: 'credit',
-      subtype: 'credit card',
-      current_balance_cents: 23_410,
-      role: 'ignored',
-      target_balance_cents: null,
-    });
-    return { status: 'success', institution: clone(inst) };
-  }
 
   // Persist after every call (cheap; the world is tiny).
   const wrapped = {} as Record<string, unknown>;

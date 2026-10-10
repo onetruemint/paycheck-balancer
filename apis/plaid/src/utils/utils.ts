@@ -9,4 +9,5 @@ export interface ConfigDecorator {
   products: Products[];
   countryCodes: CountryCode[];
   androidPackageName: string;
+  clientUserId: string;
 }

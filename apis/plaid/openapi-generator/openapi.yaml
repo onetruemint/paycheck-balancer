@@ -14,8 +14,10 @@ paths:
       operationId: createLinkToken
       summary: Create a Plaid Link token
       description: >-
-        Creates a Plaid `link_token`, which is used to initialize Plaid Link
-        on the client.
+        Creates a Plaid `link_token` via `/link/token/create`. Omit `itemId`
+        to link a new institution. Pass an existing `itemId` to run Link in
+        update mode (reconnect) — the server looks up that Item's stored
+        access token itself; the caller never supplies one directly.
       tags:
         - Plaid
       requestBody:
@@ -38,14 +40,22 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PlaidClientError'
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: '`itemId` does not match a stored access token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
   /api/get_access_token:
     post:
       operationId: getAccessToken
-      summary: Get a permanent access token.
+      summary: Exchange a Plaid Link public token for a permanent Item.
       description: >-
-        Exchanges a temporary public token for a permanent Item Access
-        token.
+        Exchanges a temporary public token (from Plaid Link's `onSuccess`)
+        for a permanent Item access token via `/item/public_token/exchange`.
+        The access token is stored server-side, keyed by `item_id`, and is
+        never returned to the caller.
       tags:
         - Plaid
       requestBody:
@@ -55,7 +65,7 @@ paths:
             schema:
               $ref: '#/components/schemas/PublicTokenExchangeRequest'
       responses:
-        '200':  
+        '200':
           description: Access token successfully exchanged.
           content:
             application/json:
@@ -63,38 +73,35 @@ paths:
                 $ref: '#/components/schemas/PublicTokenExchangeResponse'
         '400':
           description: >-
-            The request to Plaid's `/item/public_token/exchange` endpoint failed
-            (e.g. invalid configuration or a validation error).
+            The request to Plaid's `/item/public_token/exchange` endpoint
+            failed (e.g. invalid configuration or a validation error).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PlaidClientError'
+                $ref: '#/components/schemas/ApiError'
 components:
   schemas:
-    PlaidClientError:
+    ApiError:
       type: object
       required:
-        - err
+        - code
+        - message
       properties:
-        err:
-          description: >-
-            Either a validation error message (string) or the raw error
-            thrown while calling Plaid's `/link/token/create` endpoint.
-          oneOf:
-            - type: string
-            - type: object
+        code:
+          type: string
+          description: Machine-readable code, e.g. VALIDATION, PLAID_ERROR, NOT_FOUND.
+          examples: [VALIDATION, PLAID_ERROR, NOT_FOUND]
+        message:
+          type: string
+          description: Human-readable error message.
     CreateLinkTokenRequest:
       type: object
-      required:
-        - clientId
-        - redirectUri
       properties:
-        clientId:
+        itemId:
           type: string
-          description: Unique identifier for the current user (used as Plaid's client_user_id).
-        redirectUri:
-          type: string
-          description: The URI Plaid should redirect to after the Link flow completes.
+          description: >-
+            Plaid Item id to reconnect (update mode). Omit to link a new
+            institution.
     LinkTokenCreateResponse:
       type: object
       required:
@@ -117,12 +124,6 @@ components:
           description: >-
             A unique identifier for the request, which can be used for
             troubleshooting.
-        hosted_link_url:
-          type: string
-          description: >-
-            A URL of a Plaid-hosted Link flow that will use the Link token
-            returned by this request. Only present if the session is
-            enabled for Hosted Link.
     PublicTokenExchangeRequest:
       type: object
       required:
@@ -134,14 +135,10 @@ components:
     PublicTokenExchangeResponse:
       type: object
       required:
-        - access_token
         - item_id
       properties:
-        access_token:
-          type: string
-          description: >-
-            An access_token associated with the item for which data is being requested.
         item_id:
           type: string
           description: >-
-            The item_id value of the Item associated with the returned access_token
+            The item_id value of the Item associated with the exchanged
+            access token. The access token itself is never returned.

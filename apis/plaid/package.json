@@ -9,7 +9,7 @@
     "generate:client": "openapi-generator-cli generate && node scripts/fix-generated-esm-imports.mjs",
     "build": "pnpm run generate:client && tsc",
     "lint": "eslint .",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run"
   },
   "keywords": [],
   "author": "",
@@ -31,6 +31,7 @@
     "@types/node": "^24.0.0",
     "nodemon": "^3.1.14",
     "tsx": "^4.23.13",
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.0"
   }
 }

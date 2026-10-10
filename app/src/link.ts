@@ -1,110 +1,131 @@
-import { api } from './api';
-import type { LinkCompleteRequest, LinkCompleteResponse } from './api';
-
-// Plaid Hosted Link redirect flow:
-//   1. generate a session_ref and ask the API for a link token (new or update mode),
-//      with a return URL that carries the session_ref
-//   2. remember { link_token, session_ref } locally, then navigate the whole page to Plaid
-//   3. Plaid redirects back to RETURN_PARAM; we hand the link_token (or, if local
-//      storage didn't survive the trip, e.g. iOS standalone PWA, the session_ref from
-//      the URL) to the API, which checks the session and exchanges it synchronously.
-
-const PENDING_KEY = 'statemint.pendingLink';
-const RETURN_PARAM = 'link_return';
-const REF_PARAM = 'ref';
-
-interface PendingLink {
-  link_token: string;
-  session_ref: string;
-}
-
-// crypto.randomUUID needs a secure context; getRandomValues works over plain-HTTP LAN too.
-function newSessionRef(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-export async function startLink(mode: 'new' | 'update', institutionId?: string) {
-  const sessionRef = newSessionRef();
-  const returnUrl = new URL(location.pathname, location.origin);
-  returnUrl.searchParams.set(RETURN_PARAM, '1');
-  returnUrl.searchParams.set(REF_PARAM, sessionRef);
-  const { link_token, hosted_link_url } = await api.createLinkToken({
-    mode,
-    institution_id: institutionId,
-    completion_redirect_uri: returnUrl.toString(),
-    session_ref: sessionRef,
-  });
-  const pending: PendingLink = { link_token, session_ref: sessionRef };
-  localStorage.setItem(PENDING_KEY, JSON.stringify(pending));
-  location.assign(hosted_link_url);
-}
-
-// session_ref from the return URL, kept in memory so Retry works after the URL is cleaned.
-let returnRef: string | null = null;
-
-/**
- * Call once before first render. If Plaid just redirected back, strips the return
- * params, points the hash at Accounts, and reports that a session needs completing.
- */
-export function consumeLinkReturn(): boolean {
-  const url = new URL(location.href);
-  if (!url.searchParams.has(RETURN_PARAM)) return false;
-  returnRef = url.searchParams.get(REF_PARAM);
-  url.searchParams.delete(RETURN_PARAM);
-  url.searchParams.delete(REF_PARAM);
-  url.hash = '/accounts';
-  history.replaceState(null, '', url.toString());
-  return true;
-}
-
-function readPending(): PendingLink | null {
-  try {
-    const raw = localStorage.getItem(PENDING_KEY);
-    return raw ? (JSON.parse(raw) as PendingLink) : null;
-  } catch {
-    return null;
-  }
-}
-
-/** localStorage is primary; the URL's session_ref is the fallback (or wins if they disagree). */
-function pendingRequest(): LinkCompleteRequest | null {
-  const stored = readPending();
-  if (stored && (!returnRef || stored.session_ref === returnRef)) {
-    return { link_token: stored.link_token };
-  }
-  return returnRef ? { session_ref: returnRef } : null;
-}
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { usePlaidLink, type PlaidLinkError } from 'react-plaid-link';
+import { api, isMock } from './api';
 
 export type LinkOutcome =
-  | { kind: 'result'; result: LinkCompleteResponse }
-  | { kind: 'no_session' }
+  | { kind: 'success' }
+  | { kind: 'reconnected' }
+  | { kind: 'exited' }
   | { kind: 'error'; message: string };
 
-let inflight: Promise<LinkOutcome> | null = null;
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+function exitMessage(error: PlaidLinkError): string {
+  return error.error_message || error.display_message || 'Link closed with an error.';
+}
+
+/** `onExit` fires with `error: null` on a plain user-initiated close — that's a cancel, not a failure. */
+export function exitOutcome(error: PlaidLinkError | null): LinkOutcome {
+  return error ? { kind: 'error', message: exitMessage(error) } : { kind: 'exited' };
+}
+
+/** Update-mode Link doesn't mint a new access token, so there is nothing to exchange. */
+export function shouldExchangeOnSuccess(mode: 'new' | 'update'): boolean {
+  return mode === 'new';
+}
 
 /**
- * Completes the pending Hosted Link session via the API (synchronous token exchange).
- * Concurrent calls share one request, so a double-mounted effect (React StrictMode)
- * can't exchange twice. The pending token is only discarded once the session is
- * settled (success / exited), so errors and "pending" can be retried.
+ * `usePlaidLink` loads Plaid's script unconditionally; if that load fails
+ * (offline, blocked), its `error` becomes non-null and `ready` never turns
+ * true, so `open()` is never called. Without this, the caller is left
+ * showing "Opening Plaid…" forever with no way out but a reload.
  */
-export function completePendingLink(): Promise<LinkOutcome> {
-  inflight ??= (async (): Promise<LinkOutcome> => {
-    const req = pendingRequest();
-    if (!req) return { kind: 'no_session' };
-    try {
-      const result = await api.completeLink(req);
-      if (result.status === 'success' || result.status === 'exited') {
-        localStorage.removeItem(PENDING_KEY);
-        returnRef = null;
+export function scriptLoadErrorOutcome(error: ErrorEvent | null): LinkOutcome | null {
+  if (!error) return null;
+  return { kind: 'error', message: "Couldn't load Plaid Link. Check your connection and try again." };
+}
+
+/**
+ * Drives classic, client-side Plaid Link. `start('new')` links a fresh
+ * institution; `start('update', itemId)` reconnects an existing one. Both
+ * open Link in-page via `react-plaid-link` — there is no redirect.
+ */
+export function usePlaidLinkFlow() {
+  const [token, setToken] = useState<string | null>(null);
+  const [linking, setLinking] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<LinkOutcome | null>(null);
+  const modeRef = useRef<'new' | 'update'>('new');
+
+  const finishLink = useCallback(async (publicToken: string) => {
+    if (!shouldExchangeOnSuccess(modeRef.current)) {
+      setOutcome({ kind: 'reconnected' });
+    } else {
+      try {
+        await api.exchangeLinkToken({ publicToken });
+        setOutcome({ kind: 'success' });
+      } catch (e) {
+        setOutcome({ kind: 'error', message: errorMessage(e) });
       }
-      return { kind: 'result', result };
-    } catch (e) {
-      return { kind: 'error', message: e instanceof Error ? e.message : String(e) };
     }
-  })().finally(() => {
-    inflight = null;
+    setLinking(null);
+    setToken(null);
+  }, []);
+
+  const start = useCallback(
+    async (mode: 'new' | 'update', institutionId?: string) => {
+      setOutcome(null);
+      setLinking(institutionId ?? 'new');
+      modeRef.current = mode;
+      try {
+        const { link_token } = await api.createLinkToken({ itemId: institutionId });
+        if (isMock) {
+          // There's no real Plaid Link UI to open against a mock token.
+          await finishLink(`public-mock-${link_token}`);
+        } else {
+          setToken(link_token);
+        }
+      } catch (e) {
+        setOutcome({ kind: 'error', message: errorMessage(e) });
+        setLinking(null);
+      }
+    },
+    [finishLink]
+  );
+
+  const onSuccess = useCallback(
+    (publicToken: string | null) => {
+      if (publicToken === null) {
+        // Only possible with the deprecated public-key integration, which this
+        // app never uses (it always passes a link_token) — guard anyway since
+        // the type allows it.
+        setOutcome({ kind: 'error', message: 'Plaid Link did not return a public token.' });
+        setLinking(null);
+        setToken(null);
+        return;
+      }
+      void finishLink(publicToken);
+    },
+    [finishLink]
+  );
+
+  const onExit = useCallback((error: PlaidLinkError | null) => {
+    setToken(null);
+    setLinking(null);
+    setOutcome(exitOutcome(error));
+  }, []);
+
+  const { open, ready, error: scriptError } = usePlaidLink({
+    token: isMock ? null : token,
+    onSuccess,
+    onExit,
   });
-  return inflight;
+
+  useEffect(() => {
+    if (!isMock && ready && token) open();
+  }, [ready, token, open]);
+
+  // A failed script load leaves `ready` false forever with no other signal.
+  useEffect(() => {
+    if (isMock || !token) return;
+    const failure = scriptLoadErrorOutcome(scriptError);
+    if (failure) {
+      setOutcome(failure);
+      setLinking(null);
+      setToken(null);
+    }
+  }, [scriptError, token]);
+
+  return { start, linking, outcome, clearOutcome: () => setOutcome(null) };
 }
